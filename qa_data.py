@@ -24,11 +24,12 @@ PAD_ID = 0
 SOS_ID = 1
 UNK_ID = 2
 
+
 def setup_args():
     parser = argparse.ArgumentParser()
     code_dir = os.path.join(os.path.dirname(os.path.realpath(__file__)))
     vocab_dir = os.path.join("data", "squad")
-    glove_dir = os.path.join("download", "dwr")
+    glove_dir = os.path.join("data", "dwr")
     source_dir = os.path.join("data", "squad")
     parser.add_argument("--source_dir", default=source_dir)
     parser.add_argument("--glove_dir", default=glove_dir)
@@ -64,7 +65,8 @@ def process_glove(args, vocab_list, save_path, size=4e5, random_init=True):
     :return:
     """
     if not gfile.Exists(save_path + ".npz"):
-        glove_path = os.path.join(args.glove_dir, "glove.6B.{}d.txt".format(args.glove_dim))
+        glove_path = os.path.join(
+            args.glove_dir, "glove.6B.{}d.txt".format(args.glove_dim))
         if random_init:
             glove = np.random.randn(len(vocab_list), args.glove_dim)
         else:
@@ -88,14 +90,16 @@ def process_glove(args, vocab_list, save_path, size=4e5, random_init=True):
                     glove[idx, :] = vector
                     found += 1
 
-        print("{}/{} of word vocab have corresponding vectors in {}".format(found, len(vocab_list), glove_path))
+        print("{}/{} of word vocab have corresponding vectors in {}".format(found,
+                                                                            len(vocab_list), glove_path))
         np.savez_compressed(save_path, glove=glove)
         print("saved trimmed glove matrix at: {}".format(save_path))
 
 
 def create_vocabulary(vocabulary_path, data_paths, tokenizer=None):
     if not gfile.Exists(vocabulary_path):
-        print("Creating vocabulary %s from data %s" % (vocabulary_path, str(data_paths)))
+        print("Creating vocabulary %s from data %s" %
+              (vocabulary_path, str(data_paths)))
         vocab = {}
         for path in data_paths:
             with open(path, mode="rb") as f:
@@ -104,7 +108,8 @@ def create_vocabulary(vocabulary_path, data_paths, tokenizer=None):
                     counter += 1
                     if counter % 100000 == 0:
                         print("processing line %d" % counter)
-                    tokens = tokenizer(line) if tokenizer else basic_tokenizer(line)
+                    tokens = tokenizer(
+                        line) if tokenizer else basic_tokenizer(line)
                     for w in tokens:
                         if w in vocab:
                             vocab[w] += 1
@@ -138,7 +143,8 @@ def data_to_token_ids(data_path, target_path, vocabulary_path,
                     if counter % 5000 == 0:
                         print("tokenizing line %d" % counter)
                     token_ids = sentence_to_token_ids(line, vocab, tokenizer)
-                    tokens_file.write(" ".join([str(tok) for tok in token_ids]) + "\n")
+                    tokens_file.write(
+                        " ".join([str(tok) for tok in token_ids]) + "\n")
 
 
 if __name__ == '__main__':
@@ -154,7 +160,8 @@ if __name__ == '__main__':
                        pjoin(args.source_dir, "train.question"),
                        pjoin(args.source_dir, "val.context"),
                        pjoin(args.source_dir, "val.question")])
-    vocab, rev_vocab = initialize_vocabulary(pjoin(args.vocab_dir, "vocab.dat"))
+    vocab, rev_vocab = initialize_vocabulary(
+        pjoin(args.vocab_dir, "vocab.dat"))
 
     # ======== Trim Distributed Word Representation =======
     # If you use other word representations, you should change the code below
