@@ -1,0 +1,4 @@
+.env/
+
+# no local history
+.history/
