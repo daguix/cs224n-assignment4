@@ -83,7 +83,7 @@ def list_topics(data):
 def tokenize(sequence):
     tokens = [token.replace("``", '"').replace("''", '"')
               for token in nltk.word_tokenize(sequence)]
-    return map(lambda x: x.encode('utf8'), tokens)
+    return list(map(lambda x: x.encode('utf8'), tokens))
 
 
 def token_idx_map(context, context_tokens):
