@@ -10,7 +10,7 @@ import argparse
 
 from six.moves import urllib
 
-from tensorflow.python.platform import gfile
+import tensorflow as tf
 from tqdm import *
 import numpy as np
 from os.path import join as pjoin
@@ -48,9 +48,9 @@ def basic_tokenizer(sentence):
 
 def initialize_vocabulary(vocabulary_path):
     # map vocab to word embeddings
-    if gfile.Exists(vocabulary_path):
+    if tf.gfile.Exists(vocabulary_path):
         rev_vocab = []
-        with gfile.GFile(vocabulary_path, mode="r") as f:
+        with tf.gfile.GFile(vocabulary_path, mode="r") as f:
             rev_vocab.extend(f.readlines())
         rev_vocab = [line.strip('\n') for line in rev_vocab]
         vocab = dict([(x, y) for (y, x) in enumerate(rev_vocab)])
@@ -64,7 +64,7 @@ def process_glove(args, vocab_list, save_path, size=4e5, random_init=True):
     :param vocab_list: [vocab]
     :return:
     """
-    if not gfile.Exists(save_path + ".npz"):
+    if not tf.gfile.Exists(save_path + ".npz"):
         glove_path = os.path.join(
             args.glove_dir, "glove.6B.{}d.txt".format(args.glove_dim))
         if random_init:
@@ -97,7 +97,7 @@ def process_glove(args, vocab_list, save_path, size=4e5, random_init=True):
 
 
 def create_vocabulary(vocabulary_path, data_paths, tokenizer=None):
-    if not gfile.Exists(vocabulary_path):
+    if not tf.gfile.Exists(vocabulary_path):
         print("Creating vocabulary %s from data %s" %
               (vocabulary_path, str(data_paths)))
         vocab = {}
@@ -117,7 +117,7 @@ def create_vocabulary(vocabulary_path, data_paths, tokenizer=None):
                             vocab[w] = 1
         vocab_list = _START_VOCAB + sorted(vocab, key=vocab.get, reverse=True)
         print("Vocabulary size: %d" % len(vocab_list))
-        with gfile.GFile(vocabulary_path, mode="wb") as vocab_file:
+        with tf.gfile.GFile(vocabulary_path, mode="wb") as vocab_file:
             for w in vocab_list:
                 vocab_file.write(w + b"\n")
 
@@ -132,11 +132,11 @@ def sentence_to_token_ids(sentence, vocabulary, tokenizer=None):
 
 def data_to_token_ids(data_path, target_path, vocabulary_path,
                       tokenizer=None):
-    if not gfile.Exists(target_path):
+    if not tf.gfile.Exists(target_path):
         print("Tokenizing data in %s" % data_path)
         vocab, _ = initialize_vocabulary(vocabulary_path)
-        with gfile.GFile(data_path, mode="rb") as data_file:
-            with gfile.GFile(target_path, mode="w") as tokens_file:
+        with tf.gfile.GFile(data_path, mode="rb") as data_file:
+            with tf.gfile.GFile(target_path, mode="w") as tokens_file:
                 counter = 0
                 for line in data_file:
                     counter += 1
