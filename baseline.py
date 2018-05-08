@@ -53,7 +53,7 @@ class Baseline(object):
         self.train_dataset = train_dataset
         self.val_dataset = val_dataset
         self.embedding = embedding
-        self.batch_size = 128
+        self.batch_size = 1024
         self.lr = 0.001
         self.gstep = tf.Variable(0, dtype=tf.int32,
                                  trainable=False, name='global_step')
