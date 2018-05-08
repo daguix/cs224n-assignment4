@@ -202,6 +202,7 @@ def split_tier(prefix, train_percentage=0.9, shuffle=False):
     with open(context_filename) as current_file:
         num_lines = sum(1 for line in current_file)
     # Get indices and split into two files
+    print("num_lines", num_lines)
     indices_dev = range(num_lines)[int(num_lines * train_percentage)::]
     if shuffle:
         np.random.shuffle(indices_dev)

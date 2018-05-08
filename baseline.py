@@ -189,6 +189,10 @@ if __name__ == '__main__':
 
     embedding = load_word_embeddings()
 
+    vocabulary = load_vocabulary()
+
+    print(vocabulary)
+
     # with tf.Session() as sess:
     #    z = sess.run([y])
     #    print('embedding', y.get_shape(), z)
@@ -214,6 +218,6 @@ if __name__ == '__main__':
     # a = sess.run([x])
     # print(x.output_shapes, a)
 
-    machine = Baseline(train_dataset, val_dataset, embedding)
-    machine.build()
-    machine.train(3)
+    #machine = Baseline(train_dataset, val_dataset, embedding)
+    # machine.build()
+    # machine.train(3)
