@@ -6,6 +6,8 @@ from os.path import join as pjoin
 import numpy as np
 import tensorflow as tf
 
+from evaluate import evaluate
+
 DATA_DIR = "./data/squad"
 
 
@@ -33,11 +35,21 @@ def load_word_embeddings():
 
 
 def load_vocabulary():
-    return np.load(pjoin(DATA_DIR, "vocab.dat"))
+    with open(pjoin(DATA_DIR, "vocab.dat"), "r") as f:
+        return np.array([line.strip() for line in f])
+
+
+def convert_indices_to_text(vocabulary, context, start, end):
+    if end < start:
+        return ''
+    elif end >= len(context):
+        return ''
+    else:
+        return ' '.join(np.take(vocabulary, np.take(context, range(start, end+1))))
 
 
 class Baseline(object):
-    def __init__(self, train_dataset, val_dataset, embedding):
+    def __init__(self, train_dataset, val_dataset, embedding, vocabulary):
         self.train_dataset = train_dataset
         self.val_dataset = val_dataset
         self.embedding = embedding
@@ -48,6 +60,7 @@ class Baseline(object):
         self.lstm_hidden_size = 100
         self.dense_layer_size = 100
         self.max_context_length = 766
+        self.vocabulary = vocabulary
 
     def pred(self):
         with tf.variable_scope("lstm"):
@@ -171,8 +184,14 @@ class Baseline(object):
                         time.time() - start_time))
                     start_time = time.time()
 
-                    # if pred_start < pred_end:
-                    # print('evaluation', preds, answers)
+                    predictions = []
+                    ground_truths = []
+                    for i in range(len(preds)):
+                        predictions.append(convert_indices_to_text(
+                            self.vocabulary, contexts[i], preds[i, 0], preds[i, 1]))
+                        ground_truths.append(convert_indices_to_text(
+                            self.vocabulary, contexts[i], answers[i, 0], answers[i, 1]))
+                    print(evaluate(predictions, ground_truths))
 
                     step = 0
                     if (index + 1) % 20 == 0:
@@ -190,8 +209,6 @@ if __name__ == '__main__':
     embedding = load_word_embeddings()
 
     vocabulary = load_vocabulary()
-
-    print(vocabulary)
 
     # with tf.Session() as sess:
     #    z = sess.run([y])
@@ -218,6 +235,6 @@ if __name__ == '__main__':
     # a = sess.run([x])
     # print(x.output_shapes, a)
 
-    #machine = Baseline(train_dataset, val_dataset, embedding)
-    # machine.build()
-    # machine.train(3)
+    machine = Baseline(train_dataset, val_dataset, embedding, vocabulary)
+    machine.build()
+    machine.train(100)
