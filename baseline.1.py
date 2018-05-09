@@ -157,7 +157,7 @@ class Baseline(object):
             self.handle, self.train_iterator.output_types, self.train_iterator.output_shapes)
 
     def train(self, n_iters):
-        skip_step = 10
+        skip_step = 1
 
         with tf.Session() as sess:
 
@@ -182,10 +182,8 @@ class Baseline(object):
                 print("epoch #", epoch)
                 index = 0
                 sess.run(self.train_iterator.initializer)
-                # if index >= 5 and index < 20:
-                #    skip_step = 10
-                # elif index >= 20:
-                #    skip_step = 20
+                if index >= 5:
+                    skip_step = 10
                 start_time = time.time()
                 while True:
                     index += 1
