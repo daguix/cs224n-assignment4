@@ -189,7 +189,7 @@ class Baseline(object):
                 sess.run(self.iterator.initializer)
 
                 start_time = time.time()
-                while (index < 5):
+                while True:
                     index += 1
                     if index > 5:
                         skip_step = 10
