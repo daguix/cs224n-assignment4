@@ -5,6 +5,7 @@ import time
 from os.path import join as pjoin
 import numpy as np
 import tensorflow as tf
+from tensorflow.python.client import timeline
 
 from evaluate import evaluate
 
@@ -53,12 +54,11 @@ class Baseline(object):
         self.train_dataset = train_dataset
         self.val_dataset = val_dataset
         self.embedding = embedding
-        self.batch_size = 16
-        self.lr = 0.001
+        self.batch_size = 128
+        self.lr = 0.005
         self.gstep = tf.Variable(0, dtype=tf.int32,
                                  trainable=False, name='global_step')
         self.lstm_hidden_size = 100
-        self.dense_layer_size = 100
         self.max_context_length = 766
         self.vocabulary = vocabulary
         self.batch_max_context_length = tf.Variable(0, dtype=tf.int32)
@@ -74,15 +74,18 @@ class Baseline(object):
                 self.lstm_hidden_size, name="gru_cell_bw")
             question_embeddings = tf.nn.embedding_lookup(
                 self.embedding, self.questions)
-            question_output, question_output_final = tf.nn.bidirectional_dynamic_rnn(
+            question_output, (question_output_final_fw, question_output_final_bw) = tf.nn.bidirectional_dynamic_rnn(
                 lstm_cell_fw, lstm_cell_bw, question_embeddings, sequence_length=question_lengths, dtype=tf.float32, time_major=False)
 
-            question_output_final_fw, question_output_final_bw = question_output_final
+            lstm_cell_fw_context = tf.nn.rnn_cell.GRUCell(
+                self.lstm_hidden_size, name="gru_cell_fw_context")
+            lstm_cell_bw_context = tf.nn.rnn_cell.GRUCell(
+                self.lstm_hidden_size, name="gru_cell_bw_context")
 
             context_embeddings = tf.nn.embedding_lookup(
                 self.embedding, self.contexts)
             (context_output_fw, context_output_bw), context_output_final = tf.nn.bidirectional_dynamic_rnn(
-                lstm_cell_fw, lstm_cell_bw, context_embeddings, sequence_length=context_lengths, dtype=tf.float32, time_major=False, initial_state_fw=question_output_final_fw,
+                lstm_cell_fw_context, lstm_cell_bw_context, context_embeddings, sequence_length=context_lengths, dtype=tf.float32, time_major=False, initial_state_fw=question_output_final_fw,
                 initial_state_bw=question_output_final_bw)
 
             context_output = tf.concat(
@@ -114,12 +117,14 @@ class Baseline(object):
                 context_mask, pred_end, penalty_context_value)
 
     def loss(self):
-        loss_start = tf.nn.sparse_softmax_cross_entropy_with_logits(
-            logits=self.pred_start, labels=self.answers[:, 0])
-        loss_end = tf.nn.sparse_softmax_cross_entropy_with_logits(
-            logits=self.pred_end, labels=self.answers[:, 1])
+        with tf.variable_scope("loss"):
+            loss_start = tf.nn.sparse_softmax_cross_entropy_with_logits(
+                logits=self.pred_start, labels=self.answers[:, 0])
+            loss_end = tf.nn.sparse_softmax_cross_entropy_with_logits(
+                logits=self.pred_end, labels=self.answers[:, 1])
 
-        self.total_loss = tf.reduce_mean(loss_start) + tf.reduce_mean(loss_end)
+            self.total_loss = tf.reduce_mean(
+                loss_start) + tf.reduce_mean(loss_end)
 
     def optimize(self):
         self.opt = tf.train.AdamOptimizer(learning_rate=self.lr).minimize(self.total_loss,
@@ -150,11 +155,12 @@ class Baseline(object):
         #    self.batch_size, padded_shapes=padded_shapes, padding_values=padding_values).prefetch(1)
 
         # Create a one shot iterator over the zipped dataset
-        self.train_iterator = train_batch.make_initializable_iterator()
+        #self.train_iterator = train_batch.make_initializable_iterator()
         #self.val_iterator = val_batch.make_initializable_iterator()
 
-        self.iterator = tf.data.Iterator.from_string_handle(
-            self.handle, self.train_iterator.output_types, self.train_iterator.output_shapes)
+        self.iterator = train_batch.make_initializable_iterator()
+        # self.iterator = tf.data.Iterator.from_string_handle(
+        #    self.handle, self.train_iterator.output_types, self.train_iterator.output_shapes)
 
     def train(self, n_iters):
         skip_step = 1
@@ -167,8 +173,8 @@ class Baseline(object):
             # 2. create writer to write your graph
             ###############################
 
-            self.train_iterator_handle = sess.run(
-                self.train_iterator.string_handle())
+            # self.train_iterator_handle = sess.run(
+            #    self.train_iterator.string_handle())
             # self.val_iterator_handle = sess.run(
             #    self.val_iterator.string_handle())
 
@@ -177,41 +183,51 @@ class Baseline(object):
             #    'graphs/baseline', sess.graph)
 
             initial_step = self.gstep.eval()
-
+            index = 0
             for epoch in range(n_iters):
                 print("epoch #", epoch)
-                index = 0
-                sess.run(self.train_iterator.initializer)
+                sess.run(self.iterator.initializer)
 
                 start_time = time.time()
-                while True:
+                while (index == 0):
                     index += 1
-                    if index >= 5:
+                    if index > 5:
                         skip_step = 10
                     try:
-                        preds, contexts, answers, total_loss, opt = sess.run(
-                            [tf.transpose([tf.argmax(self.pred_start, axis=1), tf.argmax(self.pred_end, axis=1)]), self.contexts, self.answers, self.total_loss, self.opt], feed_dict={self.handle: self.train_iterator_handle})
+                        options = tf.RunOptions(
+                            trace_level=tf.RunOptions.FULL_TRACE)
+                        run_metadata = tf.RunMetadata()
+                        total_loss, opt = sess.run(
+                            [self.total_loss, self.opt], options=options, run_metadata=run_metadata)
+                        # preds, contexts, answers, total_loss, opt = sess.run(
+                        #    [tf.transpose([tf.argmax(self.pred_start, axis=1), tf.argmax(self.pred_end, axis=1)]), self.contexts, self.answers, self.total_loss, self.opt])
 
                         # print("batch_max_context_length",
                         #      batch_max_context_length, self.max_context_length)
 
-                        if (index + 1) % skip_step == 0:
+                        fetched_timeline = timeline.Timeline(
+                            run_metadata.step_stats)
+                        chrome_trace = fetched_timeline.generate_chrome_trace_format()
+                        with open('./profiling/timeline_01.json', 'w') as f:
+                            f.write(chrome_trace)
+
+                        if index % skip_step == 0:
 
                             print('Batch {}'.format(
-                                index + 1))
+                                index))
                             print('   Loss:', total_loss)
                             print('   Took: {} seconds'.format(
                                 time.time() - start_time))
                             start_time = time.time()
 
-                            predictions = []
-                            ground_truths = []
-                            for i in range(len(preds)):
-                                predictions.append(convert_indices_to_text(
-                                    self.vocabulary, contexts[i], preds[i, 0], preds[i, 1]))
-                                ground_truths.append(convert_indices_to_text(
-                                    self.vocabulary, contexts[i], answers[i, 0], answers[i, 1]))
-                            print(evaluate(predictions, ground_truths))
+                            #predictions = []
+                            #ground_truths = []
+                            # for i in range(len(preds)):
+                            #    predictions.append(convert_indices_to_text(
+                            #        self.vocabulary, contexts[i], preds[i, 0], preds[i, 1]))
+                            #    ground_truths.append(convert_indices_to_text(
+                            #        self.vocabulary, contexts[i], answers[i, 0], answers[i, 1]))
+                            #print(evaluate(predictions, ground_truths))
 
                             step = 0
                             if (index + 1) % 20 == 0:
