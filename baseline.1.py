@@ -53,7 +53,7 @@ class Baseline(object):
         self.train_dataset = train_dataset
         self.val_dataset = val_dataset
         self.embedding = embedding
-        self.batch_size = 2
+        self.batch_size = 16
         self.lr = 0.001
         self.gstep = tf.Variable(0, dtype=tf.int32,
                                  trainable=False, name='global_step')
@@ -61,6 +61,7 @@ class Baseline(object):
         self.dense_layer_size = 100
         self.max_context_length = 766
         self.vocabulary = vocabulary
+        self.batch_max_context_length = tf.Variable(0, dtype=tf.int32)
 
     def pred(self):
         with tf.variable_scope("lstm"):
@@ -80,18 +81,37 @@ class Baseline(object):
 
             context_embeddings = tf.nn.embedding_lookup(
                 self.embedding, self.contexts)
-            context_output, context_output_final = tf.nn.bidirectional_dynamic_rnn(
+            (context_output_fw, context_output_bw), context_output_final = tf.nn.bidirectional_dynamic_rnn(
                 lstm_cell_fw, lstm_cell_bw, context_embeddings, sequence_length=context_lengths, dtype=tf.float32, time_major=False, initial_state_fw=question_output_final_fw,
                 initial_state_bw=question_output_final_bw)
 
-            context_output_final_reshaped = tf.concat(
-                context_output_final, 1)
+            context_output = tf.concat(
+                [context_output_fw, context_output_bw], 2)
 
-            self.pred_start = tf.layers.dense(
-                context_output_final_reshaped, self.max_context_length, activation=None, name="linear_start")
+            context_mask = tf.sequence_mask(
+                context_lengths, maxlen=self.max_context_length)
 
-            self.pred_end = tf.layers.dense(
-                context_output_final_reshaped, self.max_context_length, activation=None, name="linear_end")
+            context_inverse_mask = tf.subtract(
+                tf.constant(1.0), tf.cast(context_mask, tf.float32))
+            penalty_context_value = tf.multiply(
+                context_inverse_mask, tf.constant(-1e9))
+
+            d = context_output.get_shape().as_list()[2]
+            context = tf.reshape(context_output, shape=[-1, d])
+            W1 = tf.get_variable("W1", initializer=tf.contrib.layers.xavier_initializer(
+            ), shape=(d, 1), dtype=tf.float32)
+            pred_start = tf.matmul(context, W1)
+            pred_start = tf.reshape(
+                pred_start, shape=[-1, self.max_context_length])
+            self.pred_start = tf.where(
+                context_mask, pred_start, penalty_context_value)
+            W2 = tf.get_variable("W2", initializer=tf.contrib.layers.xavier_initializer(
+            ), shape=(d, 1), dtype=tf.float32)
+            pred_end = tf.matmul(context, W2)
+            pred_end = tf.reshape(
+                pred_end, shape=[-1, self.max_context_length])
+            self.pred_end = tf.where(
+                context_mask, pred_end, penalty_context_value)
 
     def loss(self):
         loss_start = tf.nn.sparse_softmax_cross_entropy_with_logits(
@@ -122,7 +142,7 @@ class Baseline(object):
     def get_data(self):
         padded_shapes = ((tf.TensorShape([None]),  # question of unknown size
                           tf.TensorShape([])),  # size(question)
-                         (tf.TensorShape([None]),  # context of unknown size
+                         (tf.TensorShape([self.max_context_length]),  # context of self.max_context_length size
                           tf.TensorShape([])),  # size(context)
                          tf.TensorShape([2]))
 
@@ -157,48 +177,57 @@ class Baseline(object):
             self.val_iterator_handle = sess.run(
                 self.val_iterator.string_handle())
 
-            sess.run(self.train_iterator.initializer)
             sess.run(tf.global_variables_initializer())
             # writer = tf.summary.FileWriter(
             #    'graphs/baseline', sess.graph)
 
             initial_step = self.gstep.eval()
 
-            start_time = time.time()
-            for index in range(initial_step, n_iters):
-                if index >= 5 and index < 20:
-                    skip_step = 10
-                elif index >= 20:
-                    skip_step = 20
+            for epoch in range(n_iters):
+                print("epoch #", epoch)
+                index = 0
+                sess.run(self.train_iterator.initializer)
+                # if index >= 5 and index < 20:
+                #    skip_step = 10
+                # elif index >= 20:
+                #    skip_step = 20
+                while True:
+                    index += 1
+                    try:
+                        start_time = time.time()
+                        preds, contexts, answers, total_loss, opt = sess.run(
+                            [tf.transpose([tf.argmax(self.pred_start, axis=1), tf.argmax(self.pred_end, axis=1)]), self.contexts, self.answers, self.total_loss, self.opt], feed_dict={self.handle: self.train_iterator_handle})
 
-                preds, questions, contexts, answers, total_loss, opt = sess.run(
-                    [tf.transpose([tf.argmax(self.pred_start, axis=1), tf.argmax(self.pred_end, axis=1)]), self.questions, self.contexts, self.answers, self.total_loss, self.opt], feed_dict={self.handle: self.train_iterator_handle})
+                        # print("batch_max_context_length",
+                        #      batch_max_context_length, self.max_context_length)
 
-                if (index + 1) % skip_step == 0:
+                        if (index + 1) % skip_step == 0:
 
-                    # add back the mean pixels we subtracted before
-                    print('Step {}\n   Sum: {:5.1f}'.format(
-                        index + 1, np.sum(0)))
-                    print('   Loss:', total_loss)
-                    print('   Took: {} seconds'.format(
-                        time.time() - start_time))
-                    start_time = time.time()
+                            # add back the mean pixels we subtracted before
+                            print('Batch {}\n   Sum: {:5.1f}'.format(
+                                index + 1, np.sum(0)))
+                            print('   Loss:', total_loss)
+                            print('   Took: {} seconds'.format(
+                                time.time() - start_time))
+                            start_time = time.time()
 
-                    predictions = []
-                    ground_truths = []
-                    for i in range(len(preds)):
-                        predictions.append(convert_indices_to_text(
-                            self.vocabulary, contexts[i], preds[i, 0], preds[i, 1]))
-                        ground_truths.append(convert_indices_to_text(
-                            self.vocabulary, contexts[i], answers[i, 0], answers[i, 1]))
-                    print(evaluate(predictions, ground_truths))
+                            predictions = []
+                            ground_truths = []
+                            for i in range(len(preds)):
+                                predictions.append(convert_indices_to_text(
+                                    self.vocabulary, contexts[i], preds[i, 0], preds[i, 1]))
+                                ground_truths.append(convert_indices_to_text(
+                                    self.vocabulary, contexts[i], answers[i, 0], answers[i, 1]))
+                            print(evaluate(predictions, ground_truths))
 
-                    step = 0
-                    if (index + 1) % 20 == 0:
-                        step += 1
-                        ###############################
-                        # TO DO: save the variables into a checkpoint
-                        ###############################
+                            step = 0
+                            if (index + 1) % 20 == 0:
+                                step += 1
+                                ###############################
+                                # TO DO: save the variables into a checkpoint
+                                ###############################
+                    except tf.errors.OutOfRangeError:
+                        break
 
             # writer.close()
 
@@ -237,4 +266,4 @@ if __name__ == '__main__':
 
     machine = Baseline(train_dataset, val_dataset, embedding, vocabulary)
     machine.build()
-    machine.train(3)
+    machine.train(2)
