@@ -158,7 +158,7 @@ class Baseline(object):
             self.handle, self.train_iterator.output_types, self.train_iterator.output_shapes)
 
     def train(self, n_iters):
-        skip_step = 1
+        skip_step = 10
 
         with tf.Session() as sess:
 
