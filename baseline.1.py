@@ -199,9 +199,8 @@ class Baseline(object):
 
                         if (index + 1) % skip_step == 0:
 
-                            # add back the mean pixels we subtracted before
-                            print('Batch {}\n   Sum: {:5.1f}'.format(
-                                index + 1, np.sum(0)))
+                            print('Batch {}'.format(
+                                index + 1))
                             print('   Loss:', total_loss)
                             print('   Took: {} seconds'.format(
                                 time.time() - start_time))
