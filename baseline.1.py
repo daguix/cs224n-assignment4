@@ -189,27 +189,27 @@ class Baseline(object):
                 sess.run(self.iterator.initializer)
 
                 start_time = time.time()
-                while (index == 0):
+                while (index < 5):
                     index += 1
                     if index > 5:
                         skip_step = 10
                     try:
-                        options = tf.RunOptions(
-                            trace_level=tf.RunOptions.FULL_TRACE)
-                        run_metadata = tf.RunMetadata()
+                        # options = tf.RunOptions(
+                        #    trace_level=tf.RunOptions.FULL_TRACE)
+                        #run_metadata = tf.RunMetadata()
                         total_loss, opt = sess.run(
-                            [self.total_loss, self.opt], options=options, run_metadata=run_metadata)
+                            [self.total_loss, self.opt])  # , options=options, run_metadata=run_metadata)
                         # preds, contexts, answers, total_loss, opt = sess.run(
                         #    [tf.transpose([tf.argmax(self.pred_start, axis=1), tf.argmax(self.pred_end, axis=1)]), self.contexts, self.answers, self.total_loss, self.opt])
 
                         # print("batch_max_context_length",
                         #      batch_max_context_length, self.max_context_length)
 
-                        fetched_timeline = timeline.Timeline(
-                            run_metadata.step_stats)
-                        chrome_trace = fetched_timeline.generate_chrome_trace_format()
-                        with open('./profiling/timeline_01.json', 'w') as f:
-                            f.write(chrome_trace)
+                        # fetched_timeline = timeline.Timeline(
+                        #    run_metadata.step_stats)
+                        #chrome_trace = fetched_timeline.generate_chrome_trace_format()
+                        # with open('./profiling/timeline_'+str(index)+'.json', 'w') as f:
+                        #    f.write(chrome_trace)
 
                         if index % skip_step == 0:
 
