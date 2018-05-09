@@ -122,12 +122,8 @@ class Baseline(object):
         self.total_loss = tf.reduce_mean(loss_start) + tf.reduce_mean(loss_end)
 
     def optimize(self):
-        self.opt = 0
-        ###############################
-        # TO DO: create optimizer
         self.opt = tf.train.AdamOptimizer(learning_rate=self.lr).minimize(self.total_loss,
                                                                           global_step=self.gstep)
-        ###############################
 
     def initialize(self):
         self.handle = tf.placeholder(tf.string, shape=[])
