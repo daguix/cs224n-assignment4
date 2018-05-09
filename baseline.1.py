@@ -143,14 +143,13 @@ class Baseline(object):
                          tf.TensorShape([2]))
 
         padding_values = ((0, 0), (0, 0), 0)
-        with tf.device('/cpu:0'):
-            train_batch = self.train_dataset.padded_batch(
-                self.batch_size, padded_shapes=padded_shapes, padding_values=padding_values).prefetch(1)
+        train_batch = self.train_dataset.padded_batch(
+            self.batch_size, padded_shapes=padded_shapes, padding_values=padding_values).prefetch(1)
 
-            # val_batch = self.val_dataset.padded_batch(
-            #    self.batch_size, padded_shapes=padded_shapes, padding_values=padding_values).prefetch(1)
+        # val_batch = self.val_dataset.padded_batch(
+        #    self.batch_size, padded_shapes=padded_shapes, padding_values=padding_values).prefetch(1)
 
-            # Create a one shot iterator over the zipped dataset
+        # Create a one shot iterator over the zipped dataset
         self.train_iterator = train_batch.make_initializable_iterator()
         #self.val_iterator = val_batch.make_initializable_iterator()
 
@@ -170,7 +169,7 @@ class Baseline(object):
 
             self.train_iterator_handle = sess.run(
                 self.train_iterator.string_handle())
-            #self.val_iterator_handle = sess.run(
+            # self.val_iterator_handle = sess.run(
             #    self.val_iterator.string_handle())
 
             sess.run(tf.global_variables_initializer())
