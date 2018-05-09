@@ -136,27 +136,26 @@ class Baseline(object):
         self.optimize()
 
     def get_data(self):
+        padded_shapes = ((tf.TensorShape([None]),  # question of unknown size
+                          tf.TensorShape([])),  # size(question)
+                         (tf.TensorShape([self.max_context_length]),  # context of self.max_context_length size
+                          tf.TensorShape([])),  # size(context)
+                         tf.TensorShape([2]))
+
+        padding_values = ((0, 0), (0, 0), 0)
         with tf.device('/cpu:0'):
-            padded_shapes = ((tf.TensorShape([None]),  # question of unknown size
-                              tf.TensorShape([])),  # size(question)
-                             (tf.TensorShape([self.max_context_length]),  # context of self.max_context_length size
-                              tf.TensorShape([])),  # size(context)
-                             tf.TensorShape([2]))
-
-            padding_values = ((0, 0), (0, 0), 0)
-
             train_batch = self.train_dataset.padded_batch(
                 self.batch_size, padded_shapes=padded_shapes, padding_values=padding_values).prefetch(1)
 
-            val_batch = self.val_dataset.padded_batch(
-                self.batch_size, padded_shapes=padded_shapes, padding_values=padding_values).prefetch(1)
+            # val_batch = self.val_dataset.padded_batch(
+            #    self.batch_size, padded_shapes=padded_shapes, padding_values=padding_values).prefetch(1)
 
             # Create a one shot iterator over the zipped dataset
-            self.train_iterator = train_batch.make_initializable_iterator()
-            self.val_iterator = val_batch.make_initializable_iterator()
+        self.train_iterator = train_batch.make_initializable_iterator()
+        #self.val_iterator = val_batch.make_initializable_iterator()
 
-            self.iterator = tf.data.Iterator.from_string_handle(
-                self.handle, self.train_iterator.output_types, self.train_iterator.output_shapes)
+        self.iterator = tf.data.Iterator.from_string_handle(
+            self.handle, self.train_iterator.output_types, self.train_iterator.output_shapes)
 
     def train(self, n_iters):
         skip_step = 10
@@ -171,8 +170,8 @@ class Baseline(object):
 
             self.train_iterator_handle = sess.run(
                 self.train_iterator.string_handle())
-            self.val_iterator_handle = sess.run(
-                self.val_iterator.string_handle())
+            #self.val_iterator_handle = sess.run(
+            #    self.val_iterator.string_handle())
 
             sess.run(tf.global_variables_initializer())
             # writer = tf.summary.FileWriter(
