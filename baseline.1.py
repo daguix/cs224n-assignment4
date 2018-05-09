@@ -182,11 +182,12 @@ class Baseline(object):
                 print("epoch #", epoch)
                 index = 0
                 sess.run(self.train_iterator.initializer)
-                if index >= 5:
-                    skip_step = 10
+
                 start_time = time.time()
                 while True:
                     index += 1
+                    if index >= 5:
+                        skip_step = 10
                     try:
                         preds, contexts, answers, total_loss, opt = sess.run(
                             [tf.transpose([tf.argmax(self.pred_start, axis=1), tf.argmax(self.pred_end, axis=1)]), self.contexts, self.answers, self.total_loss, self.opt], feed_dict={self.handle: self.train_iterator_handle})
