@@ -85,8 +85,12 @@ class Baseline(object):
         with tf.variable_scope("contextual_embedding_layer"):
             lstm_cell_fw = tf.nn.rnn_cell.GRUCell(
                 self.lstm_hidden_size, name="gru_cell_fw")
+            lstm_cell_fw = tf.contrib.rnn.DropoutWrapper(
+                lstm_cell_fw, input_keep_prob=self.keep_prob)
             lstm_cell_bw = tf.nn.rnn_cell.GRUCell(
                 self.lstm_hidden_size, name="gru_cell_bw")
+            lstm_cell_bw = tf.contrib.rnn.DropoutWrapper(
+                lstm_cell_bw, input_keep_prob=self.keep_prob)
 
             (question_output_fw, question_output_bw), (question_output_final_fw, question_output_final_bw) = tf.nn.bidirectional_dynamic_rnn(
                 lstm_cell_fw, lstm_cell_bw, question_embeddings, sequence_length=question_lengths, dtype=tf.float32, time_major=False, dropout=self.keep_prob)
