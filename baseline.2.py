@@ -59,7 +59,6 @@ class Baseline(object):
         self.gstep = tf.Variable(0, dtype=tf.int32,
                                  trainable=False, name='global_step')
         self.lstm_hidden_size = 100
-        self.max_context_length = 766
         self.vocabulary = vocabulary
         self.batch_max_context_length = tf.Variable(0, dtype=tf.int32)
         self.handle = tf.placeholder(tf.string, shape=[])
@@ -68,6 +67,9 @@ class Baseline(object):
         with tf.variable_scope("lstm"):
             (self.questions, question_lengths), (self.contexts,
                                                  context_lengths), self.answers = self.iterator.get_next()
+
+            self.max_context_length = tf.reduce_max(context_lengths)
+            self.max_question_length = tf.reduce_max(question_lengths)
 
             lstm_cell_fw = tf.nn.rnn_cell.GRUCell(
                 self.lstm_hidden_size, name="gru_cell_fw")
@@ -156,7 +158,7 @@ class Baseline(object):
     def get_data(self):
         padded_shapes = ((tf.TensorShape([None]),  # question of unknown size
                           tf.TensorShape([])),  # size(question)
-                         (tf.TensorShape([self.max_context_length]),  # context of self.max_context_length size
+                         (tf.TensorShape([None]),  # context of self.max_context_length size
                           tf.TensorShape([])),  # size(context)
                          tf.TensorShape([2]))
 

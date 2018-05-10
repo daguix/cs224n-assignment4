@@ -1,15 +1,18 @@
 import os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 import time
+import logging
 
 from os.path import join as pjoin
 import numpy as np
 import tensorflow as tf
-from tensorflow.python.client import timeline
+from utils import Progbar
 
 from evaluate import evaluate
 
 DATA_DIR = "./data/squad"
+
+logging.basicConfig(level=logging.INFO)
 
 
 def load_from_file(file):
@@ -59,28 +62,29 @@ class Baseline(object):
         self.gstep = tf.Variable(0, dtype=tf.int32,
                                  trainable=False, name='global_step')
         self.lstm_hidden_size = 100
-        self.max_context_length = 766
-        self.max_question_length = 40
         self.vocabulary = vocabulary
-        self.batch_max_context_length = tf.Variable(0, dtype=tf.int32)
         self.handle = tf.placeholder(tf.string, shape=[])
 
     def pred(self):
-        with tf.variable_scope("lstm"):
+        with tf.variable_scope("embedding_layer"):
             (self.questions, question_lengths), (self.contexts,
                                                  context_lengths), self.answers = self.iterator.get_next()
 
+            max_context_length = tf.reduce_max(context_lengths)
+            max_question_length = tf.reduce_max(question_lengths)
+
             context_mask = tf.sequence_mask(
-                context_lengths, maxlen=self.max_context_length)
+                context_lengths)
 
             question_mask = tf.sequence_mask(
-                question_lengths, maxlen=self.max_question_length)
+                question_lengths)
 
             question_embeddings = tf.nn.embedding_lookup(
                 self.embedding, self.questions)
             context_embeddings = tf.nn.embedding_lookup(
                 self.embedding, self.contexts)
 
+        with tf.variable_scope("contextual_embedding_layer"):
             lstm_cell_fw = tf.nn.rnn_cell.GRUCell(
                 self.lstm_hidden_size, name="gru_cell_fw")
             lstm_cell_bw = tf.nn.rnn_cell.GRUCell(
@@ -100,6 +104,7 @@ class Baseline(object):
             context_output = tf.concat(
                 [context_output_fw, context_output_bw], 2)
 
+        with tf.variable_scope("attention_layer"):
             d = context_output.get_shape().as_list()[-1]
             # d is equal to 2*self.lstm_hidden_size
 
@@ -107,19 +112,17 @@ class Baseline(object):
             interaction_weights = tf.get_variable(
                 "W_interaction", shape=[d, d])
             context_output_W = tf.reshape(tf.matmul(tf.reshape(context_output, shape=[-1, d]), interaction_weights),
-                                          shape=[-1, self.max_context_length, d])
+                                          shape=[-1, max_context_length, d])
 
             # (BS, MPL, HS * 2) @ (BS, HS * 2, MCL) -> (BS ,MCL, MQL)
             score = tf.matmul(context_output_W, tf.transpose(
                 question_output, [0, 2, 1]))
 
-            print('score dim', score.get_shape().as_list())
-
             # Create mask (BS, MPL) -> (BS, MPL, 1) -> (BS, MPL, MQL)
             context_mask_aug = tf.tile(tf.expand_dims(context_mask, 2), [
-                1, 1, self.max_question_length])
+                1, 1, max_question_length])
             question_mask_aug = tf.tile(tf.expand_dims(
-                question_mask, 1), [1, self.max_context_length, 1])
+                question_mask, 1), [1, max_context_length, 1])
             mask_aug = context_mask_aug & question_mask_aug
 
             new_mask_aug = tf.subtract(tf.constant(
@@ -138,8 +141,9 @@ class Baseline(object):
             # (HS * 4, HS * 2)
             Ws = tf.get_variable("Ws", shape=[d * 2, d])
             augmented_context = tf.nn.tanh(tf.reshape(tf.matmul(tf.reshape(concat_hidden, [-1, d * 2]), Ws),
-                                                      [-1, self.max_context_length, d]))
+                                                      [-1, max_context_length, d]))
 
+        with tf.variable_scope("modeling_layer"):
             lstm_cell_fw_m1 = tf.nn.rnn_cell.GRUCell(
                 self.lstm_hidden_size, name="gru_cell_fw_m1")
             lstm_cell_bw_m1 = tf.nn.rnn_cell.GRUCell(
@@ -149,32 +153,33 @@ class Baseline(object):
             m1 = tf.concat(
                 [m1_fw, m1_bw], 2)
 
-            lstm_cell_fw_m2 = tf.nn.rnn_cell.GRUCell(
-                self.lstm_hidden_size, name="gru_cell_fw_m2")
-            lstm_cell_bw_m2 = tf.nn.rnn_cell.GRUCell(
-                self.lstm_hidden_size, name="gru_cell_bw_m2")
-            (m2_fw, m2_bw), _ = tf.nn.bidirectional_dynamic_rnn(
-                lstm_cell_fw_m2, lstm_cell_bw_m2, m1, sequence_length=context_lengths, dtype=tf.float32, time_major=False)
-            m2 = tf.concat(
-                [m2_fw, m2_bw], 2)
+            # lstm_cell_fw_m2 = tf.nn.rnn_cell.GRUCell(
+            #    self.lstm_hidden_size, name="gru_cell_fw_m2")
+            # lstm_cell_bw_m2 = tf.nn.rnn_cell.GRUCell(
+            #    self.lstm_hidden_size, name="gru_cell_bw_m2")
+            # (m2_fw, m2_bw), _ = tf.nn.bidirectional_dynamic_rnn(
+            #    lstm_cell_fw_m2, lstm_cell_bw_m2, m1, sequence_length=context_lengths, dtype=tf.float32, time_major=False)
+            # m2 = tf.concat(
+            #    [m2_fw, m2_bw], 2)
 
+        with tf.variable_scope("output_layer"):
             context_inverse_mask = tf.subtract(
                 tf.constant(1.0), tf.cast(context_mask, tf.float32))
             penalty_context_value = tf.multiply(
                 context_inverse_mask, tf.constant(-1e9))
-            final_context = tf.reshape(m2, shape=[-1, d])
+            final_context = tf.reshape(m1, shape=[-1, d])
             W1 = tf.get_variable("W1", initializer=tf.contrib.layers.xavier_initializer(
             ), shape=(d, 1), dtype=tf.float32)
             pred_start = tf.matmul(final_context, W1)
             pred_start = tf.reshape(
-                pred_start, shape=[-1, self.max_context_length])
+                pred_start, shape=[-1, max_context_length])
             self.pred_start = tf.where(
                 context_mask, pred_start, penalty_context_value)
             W2 = tf.get_variable("W2", initializer=tf.contrib.layers.xavier_initializer(
             ), shape=(d, 1), dtype=tf.float32)
             pred_end = tf.matmul(final_context, W2)
             pred_end = tf.reshape(
-                pred_end, shape=[-1, self.max_context_length])
+                pred_end, shape=[-1, max_context_length])
             self.pred_end = tf.where(
                 context_mask, pred_end, penalty_context_value)
 
@@ -202,9 +207,9 @@ class Baseline(object):
         self.optimize()
 
     def get_data(self):
-        padded_shapes = ((tf.TensorShape([self.max_question_length]),  # question of unknown size
+        padded_shapes = ((tf.TensorShape([None]),  # question of unknown size
                           tf.TensorShape([])),  # size(question)
-                         (tf.TensorShape([self.max_context_length]),  # context of self.max_context_length size
+                         (tf.TensorShape([None]),  # context of unknown size
                           tf.TensorShape([])),  # size(context)
                          tf.TensorShape([2]))
 
@@ -214,81 +219,75 @@ class Baseline(object):
 
         # train_evaluation = self.train_dataset.
 
+        train_eval_batch = self.train_dataset.shuffle(10000).padded_batch(
+            self.batch_size, padded_shapes=padded_shapes, padding_values=padding_values)
+
         val_batch = self.val_dataset.shuffle(10000).padded_batch(
-            self.batch_size, padded_shapes=padded_shapes, padding_values=padding_values).prefetch(1)
+            500, padded_shapes=padded_shapes, padding_values=padding_values).prefetch(1)
 
         # Create a one shot iterator over the zipped dataset
         self.train_iterator = train_batch.make_initializable_iterator()
         self.val_iterator = val_batch.make_initializable_iterator()
+        self.train_eval_iterator = train_eval_batch.make_initializable_iterator()
 
         # self.iterator = train_batch.make_initializable_iterator()
         self.iterator = tf.data.Iterator.from_string_handle(
             self.handle, self.train_iterator.output_types, self.train_iterator.output_shapes)
 
     def train(self, n_iters):
-        skip_step = 1
+        eval_step = 10
 
         with tf.Session() as sess:
-
-            ###############################
-            # TO DO:
-            # 1. initialize your variables
-            # 2. create writer to write your graph
-            ###############################
 
             self.train_iterator_handle = sess.run(
                 self.train_iterator.string_handle())
             self.val_iterator_handle = sess.run(
                 self.val_iterator.string_handle())
+            self.train_eval_iterator_handle = sess.run(
+                self.train_eval_iterator.string_handle())
 
             sess.run(tf.global_variables_initializer())
-            # writer = tf.summary.FileWriter(
-            #    'graphs/baseline', sess.graph)
-
+            writer = tf.summary.FileWriter(
+                'graphs/attention1', sess.graph)
             initial_step = self.gstep.eval()
-            index = 0
+            sess.run(self.val_iterator.initializer)
+            sess.run(self.train_eval_iterator.initializer)
+
+            variables = tf.trainable_variables()
+            num_vars = np.sum([np.prod(v.get_shape().as_list())
+                               for v in variables])
+
+            logging.info("Number of variables in models: {}".format(num_vars))
+
             for epoch in range(n_iters):
                 print("epoch #", epoch)
+                num_batches = int(67978.0 / self.batch_size)
+                progress = Progbar(target=num_batches)
                 sess.run(self.train_iterator.initializer)
-
-                start_time = time.time()
-
-                # print('test for cosine similarity', sess.run([self.question_embeddings, self.context_embeddings, self.normalized_question_embeddings,
-                #                                              self.normalized_context_embeddings, self.similarity, self.similarity_max], feed_dict={self.handle: self.train_iterator_handle}))
-
+                index = 0
                 while True:
                     index += 1
-                    if index > 5 and index <= 100:
-                        skip_step = 10
-                    elif index > 100:
-                        skip_step = 20
                     try:
-                        # options = tf.RunOptions(
-                        #    trace_level=tf.RunOptions.FULL_TRACE)
-                        # run_metadata = tf.RunMetadata()
-                        total_loss, opt, preds, contexts, answers = sess.run(
-                            [self.total_loss, self.opt, self.preds, self.contexts, self.answers], feed_dict={self.handle: self.train_iterator_handle})  # , options=options, run_metadata=run_metadata)
-                        # preds, contexts, answers, total_loss, opt = sess.run(
-                        #    [self.preds, self.contexts, self.answers, self.total_loss, self.opt])
+                        total_loss, opt = sess.run(
+                            [self.total_loss, self.opt], feed_dict={self.handle: self.train_iterator_handle})  # , options=options, run_metadata=run_metadata)
 
-                        # print("batch_max_context_length",
-                        #      batch_max_context_length, self.max_context_length)
+                        progress.update(index, [("training loss", total_loss)])
 
-                        # fetched_timeline = timeline.Timeline(
-                        #    run_metadata.step_stats)
-                        # chrome_trace = fetched_timeline.generate_chrome_trace_format()
-                        # with open('./profiling/timeline_'+str(index)+'.json', 'w') as f:
-                        #    f.write(chrome_trace)
-
-                        if index % skip_step == 0:
-
-                            print('Batch {}'.format(
-                                index))
-                            print('   Loss:', total_loss)
-                            print('   Took: {} seconds'.format(
-                                time.time() - start_time))
-                            start_time = time.time()
-
+                        if index % eval_step == 0:
+                            print('evaluation on 500 training elements:')
+                            preds, contexts, answers = sess.run([self.preds, self.contexts, self.answers], feed_dict={
+                                                                self.handle: self.train_eval_iterator_handle})
+                            predictions = []
+                            ground_truths = []
+                            for i in range(len(preds)):
+                                predictions.append(convert_indices_to_text(
+                                    self.vocabulary, contexts[i], preds[i, 0], preds[i, 1]))
+                                ground_truths.append(convert_indices_to_text(
+                                    self.vocabulary, contexts[i], answers[i, 0], answers[i, 1]))
+                            print(evaluate(predictions, ground_truths))
+                            print('evaluation on 500 validation elements:')
+                            preds, contexts, answers = sess.run([self.preds, self.contexts, self.answers], feed_dict={
+                                                                self.handle: self.val_iterator_handle})
                             predictions = []
                             ground_truths = []
                             for i in range(len(preds)):
@@ -299,17 +298,14 @@ class Baseline(object):
                             print(evaluate(predictions, ground_truths))
                             predictions = []
                             ground_truths = []
-
-                            step = 0
-                            if (index + 1) % 20 == 0:
-                                step += 1
-                                ###############################
-                                # TO DO: save the variables into a checkpoint
-                                ###############################
+                            step += 1
+                            ###############################
+                            # TO DO: save the variables into a checkpoint
+                            ###############################
                     except tf.errors.OutOfRangeError:
                         break
 
-            # writer.close()
+            writer.close()
 
 
 if __name__ == '__main__':
