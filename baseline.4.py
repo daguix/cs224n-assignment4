@@ -61,6 +61,7 @@ class Baseline(object):
         self.lstm_hidden_size = 100
         self.vocabulary = vocabulary
         self.handle = tf.placeholder(tf.string, shape=[])
+        self.keep_prob = tf.placeholder(tf.float32, shape=[])
 
     def pred(self):
         with tf.variable_scope("embedding_layer"):
@@ -88,7 +89,7 @@ class Baseline(object):
                 self.lstm_hidden_size, name="gru_cell_bw")
 
             (question_output_fw, question_output_bw), (question_output_final_fw, question_output_final_bw) = tf.nn.bidirectional_dynamic_rnn(
-                lstm_cell_fw, lstm_cell_bw, question_embeddings, sequence_length=question_lengths, dtype=tf.float32, time_major=False)
+                lstm_cell_fw, lstm_cell_bw, question_embeddings, sequence_length=question_lengths, dtype=tf.float32, time_major=False, dropout=self.keep_prob)
 
             question_output = tf.concat(
                 [question_output_fw, question_output_bw], 2)
@@ -96,7 +97,7 @@ class Baseline(object):
             (context_output_fw, context_output_bw), context_output_final = tf.nn.bidirectional_dynamic_rnn(
                 lstm_cell_fw, lstm_cell_bw, context_embeddings, sequence_length=context_lengths,
                 dtype=tf.float32, time_major=False, initial_state_fw=question_output_final_fw,
-                initial_state_bw=question_output_final_bw)
+                initial_state_bw=question_output_final_bw, dropout=self.keep_prob)
 
             context_output = tf.concat(
                 [context_output_fw, context_output_bw], 2)
@@ -134,6 +135,7 @@ class Baseline(object):
             context_aware = tf.matmul(alignment_weights, question_output)
 
             concat_hidden = tf.concat([context_aware, context_output], axis=2)
+            concat_hidden = tf.nn.dropout(concat_hidden, self.keep_prob)
 
             # (HS * 4, HS * 2)
             Ws = tf.get_variable("Ws", shape=[d * 2, d])
@@ -146,18 +148,18 @@ class Baseline(object):
             lstm_cell_bw_m1 = tf.nn.rnn_cell.GRUCell(
                 self.lstm_hidden_size, name="gru_cell_bw_m1")
             (m1_fw, m1_bw), _ = tf.nn.bidirectional_dynamic_rnn(
-                lstm_cell_fw_m1, lstm_cell_bw_m1, augmented_context, sequence_length=context_lengths, dtype=tf.float32, time_major=False)
+                lstm_cell_fw_m1, lstm_cell_bw_m1, augmented_context, sequence_length=context_lengths, dtype=tf.float32, time_major=False, dropout=self.keep_prob)
             m1 = tf.concat(
                 [m1_fw, m1_bw], 2)
 
-            # lstm_cell_fw_m2 = tf.nn.rnn_cell.GRUCell(
-            #    self.lstm_hidden_size, name="gru_cell_fw_m2")
-            # lstm_cell_bw_m2 = tf.nn.rnn_cell.GRUCell(
-            #    self.lstm_hidden_size, name="gru_cell_bw_m2")
-            # (m2_fw, m2_bw), _ = tf.nn.bidirectional_dynamic_rnn(
-            #    lstm_cell_fw_m2, lstm_cell_bw_m2, m1, sequence_length=context_lengths, dtype=tf.float32, time_major=False)
-            # m2 = tf.concat(
-            #    [m2_fw, m2_bw], 2)
+            lstm_cell_fw_m2 = tf.nn.rnn_cell.GRUCell(
+                self.lstm_hidden_size, name="gru_cell_fw_m2")
+            lstm_cell_bw_m2 = tf.nn.rnn_cell.GRUCell(
+                self.lstm_hidden_size, name="gru_cell_bw_m2")
+            (m2_fw, m2_bw), _ = tf.nn.bidirectional_dynamic_rnn(
+                lstm_cell_fw_m2, lstm_cell_bw_m2, m1, sequence_length=context_lengths, dtype=tf.float32, time_major=False, dropout=self.keep_prob)
+            m2 = tf.concat(
+                [m2_fw, m2_bw], 2)
 
         with tf.variable_scope("output_layer"):
             context_inverse_mask = tf.subtract(
@@ -266,7 +268,7 @@ class Baseline(object):
                     index += 1
                     try:
                         total_loss, opt = sess.run(
-                            [self.total_loss, self.opt], feed_dict={self.handle: self.train_iterator_handle})  # , options=options, run_metadata=run_metadata)
+                            [self.total_loss, self.opt], feed_dict={self.handle: self.train_iterator_handle, self.keep_prob: 0.75})  # , options=options, run_metadata=run_metadata)
 
                         progress.update(index, [("training loss", total_loss)])
 
@@ -275,7 +277,7 @@ class Baseline(object):
                 print(
                     'evaluation on 500 training elements:')
                 preds, contexts, answers = sess.run([self.preds, self.contexts, self.answers], feed_dict={
-                                                    self.handle: self.train_eval_iterator_handle})
+                                                    self.handle: self.train_eval_iterator_handle, self.keep_prob: 1.0})
                 predictions = []
                 ground_truths = []
                 for i in range(len(preds)):
@@ -287,7 +289,7 @@ class Baseline(object):
                 print(
                     'evaluation on 500 validation elements:')
                 preds, contexts, answers = sess.run([self.preds, self.contexts, self.answers], feed_dict={
-                                                    self.handle: self.val_iterator_handle})
+                                                    self.handle: self.val_iterator_handle, self.keep_prob: 1.0})
                 predictions = []
                 ground_truths = []
                 for i in range(len(preds)):
