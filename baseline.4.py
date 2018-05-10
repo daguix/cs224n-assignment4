@@ -93,7 +93,7 @@ class Baseline(object):
                 lstm_cell_bw, input_keep_prob=self.keep_prob)
 
             (question_output_fw, question_output_bw), (question_output_final_fw, question_output_final_bw) = tf.nn.bidirectional_dynamic_rnn(
-                lstm_cell_fw, lstm_cell_bw, question_embeddings, sequence_length=question_lengths, dtype=tf.float32, time_major=False, dropout=self.keep_prob)
+                lstm_cell_fw, lstm_cell_bw, question_embeddings, sequence_length=question_lengths, dtype=tf.float32, time_major=False)
 
             question_output = tf.concat(
                 [question_output_fw, question_output_bw], 2)
@@ -101,7 +101,7 @@ class Baseline(object):
             (context_output_fw, context_output_bw), context_output_final = tf.nn.bidirectional_dynamic_rnn(
                 lstm_cell_fw, lstm_cell_bw, context_embeddings, sequence_length=context_lengths,
                 dtype=tf.float32, time_major=False, initial_state_fw=question_output_final_fw,
-                initial_state_bw=question_output_final_bw, dropout=self.keep_prob)
+                initial_state_bw=question_output_final_bw)
 
             context_output = tf.concat(
                 [context_output_fw, context_output_bw], 2)
@@ -149,19 +149,27 @@ class Baseline(object):
         with tf.variable_scope("modeling_layer"):
             lstm_cell_fw_m1 = tf.nn.rnn_cell.GRUCell(
                 self.lstm_hidden_size, name="gru_cell_fw_m1")
+            lstm_cell_fw_m1 = tf.contrib.rnn.DropoutWrapper(
+                lstm_cell_fw_m1, input_keep_prob=self.keep_prob)
             lstm_cell_bw_m1 = tf.nn.rnn_cell.GRUCell(
                 self.lstm_hidden_size, name="gru_cell_bw_m1")
+            lstm_cell_bw_m1 = tf.contrib.rnn.DropoutWrapper(
+                lstm_cell_bw_m1, input_keep_prob=self.keep_prob)
             (m1_fw, m1_bw), _ = tf.nn.bidirectional_dynamic_rnn(
-                lstm_cell_fw_m1, lstm_cell_bw_m1, augmented_context, sequence_length=context_lengths, dtype=tf.float32, time_major=False, dropout=self.keep_prob)
+                lstm_cell_fw_m1, lstm_cell_bw_m1, augmented_context, sequence_length=context_lengths, dtype=tf.float32, time_major=False)
             m1 = tf.concat(
                 [m1_fw, m1_bw], 2)
 
             lstm_cell_fw_m2 = tf.nn.rnn_cell.GRUCell(
                 self.lstm_hidden_size, name="gru_cell_fw_m2")
+            lstm_cell_fw_m2 = tf.contrib.rnn.DropoutWrapper(
+                lstm_cell_fw_m2, input_keep_prob=self.keep_prob)
             lstm_cell_bw_m2 = tf.nn.rnn_cell.GRUCell(
                 self.lstm_hidden_size, name="gru_cell_bw_m2")
+            lstm_cell_bw_m2 = tf.contrib.rnn.DropoutWrapper(
+                lstm_cell_bw_m2, input_keep_prob=self.keep_prob)
             (m2_fw, m2_bw), _ = tf.nn.bidirectional_dynamic_rnn(
-                lstm_cell_fw_m2, lstm_cell_bw_m2, m1, sequence_length=context_lengths, dtype=tf.float32, time_major=False, dropout=self.keep_prob)
+                lstm_cell_fw_m2, lstm_cell_bw_m2, m1, sequence_length=context_lengths, dtype=tf.float32, time_major=False)
             m2 = tf.concat(
                 [m2_fw, m2_bw], 2)
 
@@ -259,6 +267,9 @@ class Baseline(object):
             variables = tf.trainable_variables()
             num_vars = np.sum([np.prod(v.get_shape().as_list())
                                for v in variables])
+
+            for i in variables:
+                print(i.name)
 
             print("Number of variables in models: {}".format(num_vars))
 
