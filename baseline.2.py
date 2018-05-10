@@ -62,6 +62,7 @@ class Baseline(object):
         self.max_context_length = 766
         self.vocabulary = vocabulary
         self.batch_max_context_length = tf.Variable(0, dtype=tf.int32)
+        self.handle = tf.placeholder(tf.string, shape=[])
 
     def pred(self):
         with tf.variable_scope("lstm"):
@@ -90,8 +91,10 @@ class Baseline(object):
             question_output_final_reshaped = tf.concat(
                 question_output_final, 1)
 
-            aligned_question_output_final_start = tf.layers.dense(
-                question_output_final_reshaped, 2*self.lstm_hidden_size, activation=tf.nn.tanh)
+            # aligned_question_output_final_start = tf.layers.dense(
+            #    question_output_final_reshaped, 2*self.lstm_hidden_size, activation=tf.nn.tanh)
+
+            aligned_question_output_final_start = question_output_final_reshaped
 
             aligned_question_output_final_end = tf.layers.dense(
                 question_output_final_reshaped, 2*self.lstm_hidden_size, activation=tf.nn.tanh)
@@ -127,6 +130,9 @@ class Baseline(object):
             self.pred_end = tf.where(
                 context_mask, attention_end, penalty_context_value)
 
+            self.preds = tf.transpose(
+                [tf.argmax(self.pred_start, axis=1), tf.argmax(self.pred_end, axis=1)])
+
     def loss(self):
         with tf.variable_scope("loss"):
             loss_start = tf.nn.sparse_softmax_cross_entropy_with_logits(
@@ -141,11 +147,7 @@ class Baseline(object):
         self.opt = tf.train.AdamOptimizer(learning_rate=self.lr).minimize(self.total_loss,
                                                                           global_step=self.gstep)
 
-    def initialize(self):
-        self.handle = tf.placeholder(tf.string, shape=[])
-
     def build(self):
-        self.initialize()
         self.get_data()
         self.pred()
         self.loss()
@@ -160,18 +162,20 @@ class Baseline(object):
 
         padding_values = ((0, 0), (0, 0), 0)
         train_batch = self.train_dataset.padded_batch(
+            self.batch_size, padded_shapes=padded_shapes, padding_values=padding_values)
+
+        # train_evaluation = self.train_dataset.
+
+        val_batch = self.val_dataset.shuffle(10000).padded_batch(
             self.batch_size, padded_shapes=padded_shapes, padding_values=padding_values).prefetch(1)
 
-        # val_batch = self.val_dataset.padded_batch(
-        #    self.batch_size, padded_shapes=padded_shapes, padding_values=padding_values).prefetch(1)
-
         # Create a one shot iterator over the zipped dataset
-        #self.train_iterator = train_batch.make_initializable_iterator()
-        #self.val_iterator = val_batch.make_initializable_iterator()
+        self.train_iterator = train_batch.make_initializable_iterator()
+        self.val_iterator = val_batch.make_initializable_iterator()
 
-        self.iterator = train_batch.make_initializable_iterator()
-        # self.iterator = tf.data.Iterator.from_string_handle(
-        #    self.handle, self.train_iterator.output_types, self.train_iterator.output_shapes)
+        #self.iterator = train_batch.make_initializable_iterator()
+        self.iterator = tf.data.Iterator.from_string_handle(
+            self.handle, self.train_iterator.output_types, self.train_iterator.output_shapes)
 
     def train(self, n_iters):
         skip_step = 1
@@ -184,10 +188,10 @@ class Baseline(object):
             # 2. create writer to write your graph
             ###############################
 
-            # self.train_iterator_handle = sess.run(
-            #    self.train_iterator.string_handle())
-            # self.val_iterator_handle = sess.run(
-            #    self.val_iterator.string_handle())
+            self.train_iterator_handle = sess.run(
+                self.train_iterator.string_handle())
+            self.val_iterator_handle = sess.run(
+                self.val_iterator.string_handle())
 
             sess.run(tf.global_variables_initializer())
             # writer = tf.summary.FileWriter(
@@ -197,7 +201,7 @@ class Baseline(object):
             index = 0
             for epoch in range(n_iters):
                 print("epoch #", epoch)
-                sess.run(self.iterator.initializer)
+                sess.run(self.train_iterator.initializer)
 
                 start_time = time.time()
                 while True:
@@ -208,10 +212,10 @@ class Baseline(object):
                         # options = tf.RunOptions(
                         #    trace_level=tf.RunOptions.FULL_TRACE)
                         #run_metadata = tf.RunMetadata()
-                        total_loss, opt = sess.run(
-                            [self.total_loss, self.opt])  # , options=options, run_metadata=run_metadata)
+                        total_loss, opt, preds, contexts, answers = sess.run(
+                            [self.total_loss, self.opt, self.preds, self.contexts, self.answers], feed_dict={self.handle: self.train_iterator_handle})  # , options=options, run_metadata=run_metadata)
                         # preds, contexts, answers, total_loss, opt = sess.run(
-                        #    [tf.transpose([tf.argmax(self.pred_start, axis=1), tf.argmax(self.pred_end, axis=1)]), self.contexts, self.answers, self.total_loss, self.opt])
+                        #    [self.preds, self.contexts, self.answers, self.total_loss, self.opt])
 
                         # print("batch_max_context_length",
                         #      batch_max_context_length, self.max_context_length)
@@ -231,14 +235,16 @@ class Baseline(object):
                                 time.time() - start_time))
                             start_time = time.time()
 
-                            #predictions = []
-                            #ground_truths = []
-                            # for i in range(len(preds)):
-                            #    predictions.append(convert_indices_to_text(
-                            #        self.vocabulary, contexts[i], preds[i, 0], preds[i, 1]))
-                            #    ground_truths.append(convert_indices_to_text(
-                            #        self.vocabulary, contexts[i], answers[i, 0], answers[i, 1]))
-                            #print(evaluate(predictions, ground_truths))
+                            predictions = []
+                            ground_truths = []
+                            for i in range(len(preds)):
+                                predictions.append(convert_indices_to_text(
+                                    self.vocabulary, contexts[i], preds[i, 0], preds[i, 1]))
+                                ground_truths.append(convert_indices_to_text(
+                                    self.vocabulary, contexts[i], answers[i, 0], answers[i, 1]))
+                            print(evaluate(predictions, ground_truths))
+                            predictions = []
+                            ground_truths = []
 
                             step = 0
                             if (index + 1) % 20 == 0:
