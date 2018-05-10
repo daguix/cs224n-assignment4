@@ -274,7 +274,7 @@ class Baseline(object):
                         progress.update(index, [("training loss", total_loss)])
 
                         if index % eval_step == 0:
-                            print('evaluation on 500 training elements:')
+                            logger.info('evaluation on 500 training elements:')
                             preds, contexts, answers = sess.run([self.preds, self.contexts, self.answers], feed_dict={
                                                                 self.handle: self.train_eval_iterator_handle})
                             predictions = []
@@ -284,8 +284,9 @@ class Baseline(object):
                                     self.vocabulary, contexts[i], preds[i, 0], preds[i, 1]))
                                 ground_truths.append(convert_indices_to_text(
                                     self.vocabulary, contexts[i], answers[i, 0], answers[i, 1]))
-                            print(evaluate(predictions, ground_truths))
-                            print('evaluation on 500 validation elements:')
+                            logger.info(evaluate(predictions, ground_truths))
+                            logger.info(
+                                'evaluation on 500 validation elements:')
                             preds, contexts, answers = sess.run([self.preds, self.contexts, self.answers], feed_dict={
                                                                 self.handle: self.val_iterator_handle})
                             predictions = []
@@ -295,10 +296,9 @@ class Baseline(object):
                                     self.vocabulary, contexts[i], preds[i, 0], preds[i, 1]))
                                 ground_truths.append(convert_indices_to_text(
                                     self.vocabulary, contexts[i], answers[i, 0], answers[i, 1]))
-                            print(evaluate(predictions, ground_truths))
+                            logger.info(evaluate(predictions, ground_truths))
                             predictions = []
                             ground_truths = []
-                            step += 1
                             ###############################
                             # TO DO: save the variables into a checkpoint
                             ###############################
