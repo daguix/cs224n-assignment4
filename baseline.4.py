@@ -1,7 +1,6 @@
 import os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 import time
-import logging
 
 from os.path import join as pjoin
 import numpy as np
@@ -11,8 +10,6 @@ from utils import Progbar
 from evaluate import evaluate
 
 DATA_DIR = "./data/squad"
-
-logging.basicConfig(level=logging.INFO)
 
 
 def load_from_file(file):
@@ -257,7 +254,7 @@ class Baseline(object):
             num_vars = np.sum([np.prod(v.get_shape().as_list())
                                for v in variables])
 
-            logging.info("Number of variables in models: {}".format(num_vars))
+            print("Number of variables in models: {}".format(num_vars))
 
             for epoch in range(n_iters):
                 print("epoch #", epoch)
@@ -274,7 +271,7 @@ class Baseline(object):
                         progress.update(index, [("training loss", total_loss)])
 
                         if index % eval_step == 0:
-                            logging.info(
+                            print(
                                 'evaluation on 500 training elements:')
                             preds, contexts, answers = sess.run([self.preds, self.contexts, self.answers], feed_dict={
                                                                 self.handle: self.train_eval_iterator_handle})
@@ -285,8 +282,8 @@ class Baseline(object):
                                     self.vocabulary, contexts[i], preds[i, 0], preds[i, 1]))
                                 ground_truths.append(convert_indices_to_text(
                                     self.vocabulary, contexts[i], answers[i, 0], answers[i, 1]))
-                            logging.info(evaluate(predictions, ground_truths))
-                            logging.info(
+                            print(evaluate(predictions, ground_truths))
+                            print(
                                 'evaluation on 500 validation elements:')
                             preds, contexts, answers = sess.run([self.preds, self.contexts, self.answers], feed_dict={
                                                                 self.handle: self.val_iterator_handle})
@@ -297,7 +294,7 @@ class Baseline(object):
                                     self.vocabulary, contexts[i], preds[i, 0], preds[i, 1]))
                                 ground_truths.append(convert_indices_to_text(
                                     self.vocabulary, contexts[i], answers[i, 0], answers[i, 1]))
-                            logging.info(evaluate(predictions, ground_truths))
+                            print(evaluate(predictions, ground_truths))
                             predictions = []
                             ground_truths = []
                             ###############################
