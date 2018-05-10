@@ -234,7 +234,7 @@ class Baseline(object):
     def train(self, n_iters):
         eval_step = 10
 
-        with tf.Session() as sess:
+        with tf.Session(config=tf.ConfigProto(log_device_placement=True)) as sess:
 
             self.train_iterator_handle = sess.run(
                 self.train_iterator.string_handle())
