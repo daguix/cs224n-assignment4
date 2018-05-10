@@ -83,11 +83,11 @@ class Baseline(object):
                 self.embedding, self.contexts)
 
         with tf.variable_scope("contextual_embedding_layer"):
-            lstm_cell_fw = tf.nn.rnn_cell.GRUCell(
+            lstm_cell_fw = tf.nn.rnn_cell.BasicLSTMCell(
                 self.lstm_hidden_size, name="gru_cell_fw")
             lstm_cell_fw = tf.contrib.rnn.DropoutWrapper(
                 lstm_cell_fw, input_keep_prob=self.keep_prob)
-            lstm_cell_bw = tf.nn.rnn_cell.GRUCell(
+            lstm_cell_bw = tf.nn.rnn_cell.BasicLSTMCell(
                 self.lstm_hidden_size, name="gru_cell_bw")
             lstm_cell_bw = tf.contrib.rnn.DropoutWrapper(
                 lstm_cell_bw, input_keep_prob=self.keep_prob)
@@ -147,11 +147,11 @@ class Baseline(object):
                                                       [-1, max_context_length, d]))
 
         with tf.variable_scope("modeling_layer"):
-            lstm_cell_fw_m1 = tf.nn.rnn_cell.GRUCell(
+            lstm_cell_fw_m1 = tf.nn.rnn_cell.BasicLSTMCell(
                 self.lstm_hidden_size, name="gru_cell_fw_m1")
             lstm_cell_fw_m1 = tf.contrib.rnn.DropoutWrapper(
                 lstm_cell_fw_m1, input_keep_prob=self.keep_prob)
-            lstm_cell_bw_m1 = tf.nn.rnn_cell.GRUCell(
+            lstm_cell_bw_m1 = tf.nn.rnn_cell.BasicLSTMCell(
                 self.lstm_hidden_size, name="gru_cell_bw_m1")
             lstm_cell_bw_m1 = tf.contrib.rnn.DropoutWrapper(
                 lstm_cell_bw_m1, input_keep_prob=self.keep_prob)
@@ -160,11 +160,11 @@ class Baseline(object):
             m1 = tf.concat(
                 [m1_fw, m1_bw], 2)
 
-            lstm_cell_fw_m2 = tf.nn.rnn_cell.GRUCell(
+            lstm_cell_fw_m2 = tf.nn.rnn_cell.BasicLSTMCell(
                 self.lstm_hidden_size, name="gru_cell_fw_m2")
             lstm_cell_fw_m2 = tf.contrib.rnn.DropoutWrapper(
                 lstm_cell_fw_m2, input_keep_prob=self.keep_prob)
-            lstm_cell_bw_m2 = tf.nn.rnn_cell.GRUCell(
+            lstm_cell_bw_m2 = tf.nn.rnn_cell.BasicLSTMCell(
                 self.lstm_hidden_size, name="gru_cell_bw_m2")
             lstm_cell_bw_m2 = tf.contrib.rnn.DropoutWrapper(
                 lstm_cell_bw_m2, input_keep_prob=self.keep_prob)
