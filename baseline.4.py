@@ -60,6 +60,7 @@ class Baseline(object):
                                  trainable=False, name='global_step')
         self.lstm_hidden_size = 100
         self.max_context_length = 766
+        self.max_question_length = 40
         self.vocabulary = vocabulary
         self.batch_max_context_length = tf.Variable(0, dtype=tf.int32)
         self.handle = tf.placeholder(tf.string, shape=[])
@@ -72,35 +73,24 @@ class Baseline(object):
             context_mask = tf.sequence_mask(
                 context_lengths, maxlen=self.max_context_length)
 
+            question_mask = tf.sequence_mask(
+                question_lengths, maxlen=self.max_question_length)
+
             question_embeddings = tf.nn.embedding_lookup(
                 self.embedding, self.questions)
             context_embeddings = tf.nn.embedding_lookup(
                 self.embedding, self.contexts)
-
-            normalized_question_embeddings = tf.nn.l2_normalize(
-                question_embeddings, axis=2)
-            normalized_context_embeddings = tf.nn.l2_normalize(
-                context_embeddings, axis=2)  #
-
-            # (BS, MCL, EMBED_DIM) @ (BS, EMBED_DIM, MQL) -> (BS ,MCL, MQL)
-
-            similarity = tf.matmul(normalized_context_embeddings, tf.transpose(
-                normalized_question_embeddings, [0, 2, 1]))
-
-            similarity_max = tf.reduce_max(similarity, axis=2)
-
-            similarity_max_reshaped = tf.reshape(
-                similarity_max, [-1, self.max_context_length, 1])
-
-            context_embeddings = similarity_max_reshaped * context_embeddings
 
             lstm_cell_fw = tf.nn.rnn_cell.GRUCell(
                 self.lstm_hidden_size, name="gru_cell_fw")
             lstm_cell_bw = tf.nn.rnn_cell.GRUCell(
                 self.lstm_hidden_size, name="gru_cell_bw")
 
-            question_output, (question_output_final_fw, question_output_final_bw) = tf.nn.bidirectional_dynamic_rnn(
+            (question_output_fw, question_output_bw), (question_output_final_fw, question_output_final_bw) = tf.nn.bidirectional_dynamic_rnn(
                 lstm_cell_fw, lstm_cell_bw, question_embeddings, sequence_length=question_lengths, dtype=tf.float32, time_major=False)
+
+            question_output = tf.concat(
+                [question_output_fw, question_output_bw], 2)
 
             (context_output_fw, context_output_bw), context_output_final = tf.nn.bidirectional_dynamic_rnn(
                 lstm_cell_fw, lstm_cell_bw, context_embeddings, sequence_length=context_lengths,
@@ -110,26 +100,79 @@ class Baseline(object):
             context_output = tf.concat(
                 [context_output_fw, context_output_bw], 2)
 
-            # aligned_question_output_final_start = tf.layers.dense(
-            #    question_output_final_reshaped, 2*self.lstm_hidden_size, activation=tf.nn.tanh)
+            d = context_output.get_shape().as_list()[-1]
+            # d is equal to 2*self.lstm_hidden_size
+
+            # (BS, MPL, MQL)
+            interaction_weights = tf.get_variable(
+                "W_interaction", shape=[d, d])
+            context_output_W = tf.reshape(tf.matmul(tf.reshape(context_output, shape=[-1, d]), interaction_weights),
+                                          shape=[-1, self.max_context_length, d])
+
+            # (BS, MPL, HS * 2) @ (BS, HS * 2, MCL) -> (BS ,MCL, MQL)
+            score = tf.matmul(context_output_W, tf.transpose(
+                question_output, [0, 2, 1]))
+
+            print('score dim', score.get_shape().as_list())
+
+            # Create mask (BS, MPL) -> (BS, MPL, 1) -> (BS, MPL, MQL)
+            context_mask_aug = tf.tile(tf.expand_dims(context_mask, 2), [
+                1, 1, self.max_question_length])
+            question_mask_aug = tf.tile(tf.expand_dims(
+                question_mask, 1), [1, self.max_context_length, 1])
+            mask_aug = context_mask_aug & question_mask_aug
+
+            new_mask_aug = tf.subtract(tf.constant(
+                1.0), tf.cast(mask_aug, tf.float32))
+            mask_value_aug = tf.multiply(new_mask_aug, tf.constant(-1e9))
+            score_prepro = tf.where(mask_aug, score, mask_value_aug)
+
+            # (BS, MPL, MQL)
+            alignment_weights = tf.nn.softmax(score_prepro)
+
+            # (BS, MPL, MQL) @ (BS, MQL, HS * 2) -> (BS, MPL, HS * 2)
+            context_aware = tf.matmul(alignment_weights, question_output)
+
+            concat_hidden = tf.concat([context_aware, context_output], axis=2)
+
+            # (HS * 4, HS * 2)
+            Ws = tf.get_variable("Ws", shape=[d * 2, d])
+            augmented_context = tf.nn.tanh(tf.reshape(tf.matmul(tf.reshape(concat_hidden, [-1, d * 2]), Ws),
+                                                      [-1, self.max_context_length, d]))
+
+            lstm_cell_fw_m1 = tf.nn.rnn_cell.GRUCell(
+                self.lstm_hidden_size, name="gru_cell_fw_m1")
+            lstm_cell_bw_m1 = tf.nn.rnn_cell.GRUCell(
+                self.lstm_hidden_size, name="gru_cell_bw_m1")
+            (m1_fw, m1_bw), _ = tf.nn.bidirectional_dynamic_rnn(
+                lstm_cell_fw_m1, lstm_cell_bw_m1, augmented_context, sequence_length=context_lengths, dtype=tf.float32, time_major=False)
+            m1 = tf.concat(
+                [m1_fw, m1_bw], 2)
+
+            lstm_cell_fw_m2 = tf.nn.rnn_cell.GRUCell(
+                self.lstm_hidden_size, name="gru_cell_fw_m2")
+            lstm_cell_bw_m2 = tf.nn.rnn_cell.GRUCell(
+                self.lstm_hidden_size, name="gru_cell_bw_m2")
+            (m2_fw, m2_bw), _ = tf.nn.bidirectional_dynamic_rnn(
+                lstm_cell_fw_m2, lstm_cell_bw_m2, m1, sequence_length=context_lengths, dtype=tf.float32, time_major=False)
+            m2 = tf.concat(
+                [m2_fw, m2_bw], 2)
 
             context_inverse_mask = tf.subtract(
                 tf.constant(1.0), tf.cast(context_mask, tf.float32))
             penalty_context_value = tf.multiply(
                 context_inverse_mask, tf.constant(-1e9))
-
-            d = context_output.get_shape().as_list()[2]
-            context = tf.reshape(context_output, shape=[-1, d])
+            final_context = tf.reshape(m2, shape=[-1, d])
             W1 = tf.get_variable("W1", initializer=tf.contrib.layers.xavier_initializer(
             ), shape=(d, 1), dtype=tf.float32)
-            pred_start = tf.matmul(context, W1)
+            pred_start = tf.matmul(final_context, W1)
             pred_start = tf.reshape(
                 pred_start, shape=[-1, self.max_context_length])
             self.pred_start = tf.where(
                 context_mask, pred_start, penalty_context_value)
             W2 = tf.get_variable("W2", initializer=tf.contrib.layers.xavier_initializer(
             ), shape=(d, 1), dtype=tf.float32)
-            pred_end = tf.matmul(context, W2)
+            pred_end = tf.matmul(final_context, W2)
             pred_end = tf.reshape(
                 pred_end, shape=[-1, self.max_context_length])
             self.pred_end = tf.where(
@@ -159,7 +202,7 @@ class Baseline(object):
         self.optimize()
 
     def get_data(self):
-        padded_shapes = ((tf.TensorShape([None]),  # question of unknown size
+        padded_shapes = ((tf.TensorShape([self.max_question_length]),  # question of unknown size
                           tf.TensorShape([])),  # size(question)
                          (tf.TensorShape([self.max_context_length]),  # context of self.max_context_length size
                           tf.TensorShape([])),  # size(context)
@@ -178,7 +221,7 @@ class Baseline(object):
         self.train_iterator = train_batch.make_initializable_iterator()
         self.val_iterator = val_batch.make_initializable_iterator()
 
-        #self.iterator = train_batch.make_initializable_iterator()
+        # self.iterator = train_batch.make_initializable_iterator()
         self.iterator = tf.data.Iterator.from_string_handle(
             self.handle, self.train_iterator.output_types, self.train_iterator.output_shapes)
 
@@ -222,7 +265,7 @@ class Baseline(object):
                     try:
                         # options = tf.RunOptions(
                         #    trace_level=tf.RunOptions.FULL_TRACE)
-                        #run_metadata = tf.RunMetadata()
+                        # run_metadata = tf.RunMetadata()
                         total_loss, opt, preds, contexts, answers = sess.run(
                             [self.total_loss, self.opt, self.preds, self.contexts, self.answers], feed_dict={self.handle: self.train_iterator_handle})  # , options=options, run_metadata=run_metadata)
                         # preds, contexts, answers, total_loss, opt = sess.run(
@@ -233,7 +276,7 @@ class Baseline(object):
 
                         # fetched_timeline = timeline.Timeline(
                         #    run_metadata.step_stats)
-                        #chrome_trace = fetched_timeline.generate_chrome_trace_format()
+                        # chrome_trace = fetched_timeline.generate_chrome_trace_format()
                         # with open('./profiling/timeline_'+str(index)+'.json', 'w') as f:
                         #    f.write(chrome_trace)
 

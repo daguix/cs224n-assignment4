@@ -16,4 +16,4 @@ def counter(data_path):
 
 
 if __name__ == '__main__':
-    counter("train.context")
+    counter("train.question")
