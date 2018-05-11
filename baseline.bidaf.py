@@ -76,11 +76,11 @@ class Baseline(object):
             (self.questions, question_lengths), (self.contexts,
                                                  context_lengths), self.answers = self.iterator.get_next()
 
-            #max_context_length = tf.reduce_max(context_lengths)
-            #max_question_length = tf.reduce_max(question_lengths)
+            max_context_length = tf.reduce_max(context_lengths)
+            max_question_length = tf.reduce_max(question_lengths)
 
-            max_context_length = self.train_max_context_length
-            max_question_length = self.train_max_question_length
+            #max_context_length = self.train_max_context_length
+            #max_question_length = self.train_max_question_length
 
             context_mask = tf.sequence_mask(
                 context_lengths, maxlen=max_context_length)
@@ -136,11 +136,11 @@ class Baseline(object):
             W_s = tf.get_variable("W_s", shape=[3*d, 1])
             # ici ajouter dropout
 
-            question_tiled = tf.tile(tf.reshape(
-                question_output, [-1, 1, max_question_length, d]), [1, max_context_length, 1, 1])
+            question_tiled = tf.tile(tf.expand_dims(
+                question_output, 1), [1, max_context_length, 1, 1])
             print('question_tiled', question_tiled.get_shape().as_list())
-            context_tiled = tf.tile(tf.reshape(
-                context_output, [-1, max_context_length, 1, d]), [1, 1, max_question_length, 1])
+            context_tiled = tf.tile(tf.expand_dims(
+                context_output, 2), [1, 1, max_question_length, 1])
             print('context_tiled', context_tiled.get_shape().as_list())
             product_tiled = tf.reshape(tf.reshape(question_tiled, [-1, d]) * tf.reshape(
                 context_tiled, [-1, d]), [-1, max_context_length, max_question_length, d])
@@ -182,13 +182,15 @@ class Baseline(object):
             b = tf.nn.softmax(max_col_similarity, axis=1)
             print('b', b.get_shape().as_list())
 
-            query_to_context_single = tf.matmul(tf.reshape(
-                b, [-1, 1, max_context_length]), context_output)
+            b = tf.expand_dims(b, 1)
+            print('b', b.get_shape().as_list())
+
+            query_to_context_single = tf.matmul(b, context_output)
             print('query_to_context_single',
                   query_to_context_single.get_shape().as_list())
 
             query_to_context = tf.tile(
-                query_to_context_single, [-1, max_context_length, 1])
+                query_to_context_single, [1, max_context_length, 1])
             print('query_to_context', query_to_context.get_shape().as_list())
 
             context_output_with_context_to_query = tf.reshape(tf.reshape(
@@ -298,9 +300,9 @@ class Baseline(object):
         self.optimize()
 
     def get_data(self):
-        padded_shapes = ((tf.TensorShape([self.train_max_question_length]),  # question of unknown size
+        padded_shapes = ((tf.TensorShape([None]),  # question of unknown size
                           tf.TensorShape([])),  # size(question)
-                         (tf.TensorShape([self.train_max_context_length]),  # context of unknown size
+                         (tf.TensorShape([None]),  # context of unknown size
                           tf.TensorShape([])),  # size(context)
                          tf.TensorShape([2]))
 
@@ -348,17 +350,15 @@ class Baseline(object):
             num_vars = np.sum([np.prod(v.get_shape().as_list())
                                for v in variables])
 
-            for i in variables:
-                print(i.name)
-
             print("Number of variables in models: {}".format(num_vars))
-
             for epoch in range(n_iters):
                 print("epoch #", epoch)
                 num_batches = int(67978.0 / self.batch_size)
                 progress = Progbar(target=num_batches)
                 sess.run(self.train_iterator.initializer)
                 index = 0
+                total_loss = 0
+                progress.update(index, [("training loss", total_loss)])
                 while True:
                     index += 1
                     try:
@@ -431,6 +431,6 @@ if __name__ == '__main__':
     # print(x.output_shapes, a)
 
     machine = Baseline(train_dataset, val_dataset,
-                       embedding, vocabulary, batch_size=256)
+                       embedding, vocabulary, batch_size=16)
     machine.build()
     machine.train(10)
