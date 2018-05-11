@@ -144,7 +144,7 @@ class Baseline(object):
     def train(self, n_iters):
         skip_step = 1
 
-        with tf.Session(config=tf.ConfigProto(log_device_placement=True)) as sess:
+        with tf.Session() as sess:
 
             ###############################
             # TO DO:
