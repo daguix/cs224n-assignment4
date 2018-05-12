@@ -7,6 +7,8 @@ import numpy as np
 import tensorflow as tf
 from utils import Progbar
 
+from evaluate import evaluate
+
 import numbers
 from evaluate import evaluate
 from tensorflow.contrib.layers import xavier_initializer
@@ -133,7 +135,8 @@ def zoneout(x, keep_prob, noise_shape=None, seed=None, name=None):
         # 0. if [keep_prob, 1.0) and 1. if [1.0, 1.0 + keep_prob)
         binary_tensor = math_ops.floor(random_tensor)
         ret = x * binary_tensor
-        return ret.set_shape(x.get_shape())
+        ret.set_shape(x.get_shape())
+        return 1. - ret
 
 
 class QRNN_fo_pooling(tf.nn.rnn_cell.RNNCell):
@@ -213,7 +216,7 @@ def qrnn_f(question_embeddings, question_lengths, hidden_size, keep_prob=1.0):
                              initializer=tf.random_uniform_initializer(minval=-.05, maxval=.05))
         f_a = tf.nn.conv1d(padded_input, Wf, stride=1, padding='VALID')
         F = tf.sigmoid(f_a)
-        F = 1. - zoneout((1. - F), keep_prob)
+        F = zoneout((1. - F), keep_prob)
         T = tf.concat([Z, F], 2)
     with tf.variable_scope('pooling'):
         pooling_fw = QRNN_f_pooling(out_fmaps)
@@ -241,7 +244,7 @@ def bi_qrnn_fo(question_embeddings, question_lengths, hidden_size, keep_prob=1.0
                              initializer=tf.random_uniform_initializer(minval=-.05, maxval=.05))
         f_a = tf.nn.conv1d(padded_input, Wf, stride=1, padding='VALID')
         F = tf.sigmoid(f_a)
-        F = 1. - zoneout((1. - F), keep_prob)
+        F = zoneout((1. - F), keep_prob)
         Wo = tf.get_variable('Wo',
                              [filter_width, in_fmaps, out_fmaps],
                              initializer=tf.random_uniform_initializer(minval=-.05, maxval=.05))
