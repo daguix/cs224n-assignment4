@@ -7,6 +7,7 @@ import numpy as np
 import tensorflow as tf
 from utils import Progbar
 
+import numbers
 from evaluate import evaluate
 from tensorflow.contrib.layers import xavier_initializer
 from tensorflow.python.framework import tensor_shape
