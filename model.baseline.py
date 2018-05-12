@@ -365,6 +365,6 @@ if __name__ == '__main__':
     # print(x.output_shapes, a)
 
     machine = Baseline(train_dataset, val_dataset,
-                       embedding, vocabulary, batch_size=128)
+                       embedding, vocabulary, batch_size=64)
     machine.build()
     machine.train(10)
