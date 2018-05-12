@@ -55,6 +55,77 @@ def preprocess_softmax(tensor, mask):
     return tf.where(mask, tensor, penalty_value)
 
 
+def bilstm(question_embeddings, question_lengths, lstm_hidden_size, keep_prob=1.0):
+    lstm_cell_fw = tf.nn.rnn_cell.GRUCell(
+        lstm_hidden_size, name="gru_cell_fw")
+    lstm_cell_fw = tf.nn.rnn_cell.DropoutWrapper(
+        lstm_cell_fw, input_keep_prob=keep_prob)
+    lstm_cell_bw = tf.nn.rnn_cell.GRUCell(
+        lstm_hidden_size, name="gru_cell_bw")
+    lstm_cell_bw = tf.nn.rnn_cell.DropoutWrapper(
+        lstm_cell_bw, input_keep_prob=keep_prob)
+
+    (question_output_fw, question_output_bw), (question_output_final_fw, question_output_final_bw) = tf.nn.bidirectional_dynamic_rnn(
+        lstm_cell_fw, lstm_cell_bw, question_embeddings, sequence_length=question_lengths, dtype=tf.float32, time_major=False)
+
+    question_output = tf.concat(
+        [question_output_fw, question_output_bw], 2)
+
+    question_output_final = tf.concat(
+        [question_output_final_fw, question_output_final_bw], 1)
+    return (question_output, question_output_final)
+
+
+class QRNN_f_pooling(tf.nn.rnn_cell.RNNCell):
+    def __init__(self, out_fmaps):
+        self.__out_fmaps = out_fmaps
+
+    @property
+    def state_size(self):
+        return self.__out_fmaps
+
+    @property
+    def output_size(self):
+        return self.__out_fmaps
+
+    def __call__(self, inputs, state, scope=None):
+        """
+        inputs: 2-D tensor of shape [batch_size, Zfeats + [gates]]
+        """
+        # pool_type = self.__pool_type
+        # print('QRNN pooling inputs shape: ', inputs.get_shape())
+        # print('QRNN pooling state shape: ', state.get_shape())
+        with tf.variable_scope(scope or "QRNN-f-pooling"):
+                # extract Z activations and F gate activations
+            Z, F = tf.split(1, 2, inputs)
+            # return the dynamic average pooling
+            output = tf.multiply(F, state) + tf.multiply(tf.subtract(1., F), Z)
+            return output, output
+
+
+def qrnn(question_embeddings, question_lengths, lstm_hidden_size):
+    filter_width = 2
+    in_fmaps = question_embeddings.get_shape().as_list()[-1]
+    out_fmaps = lstm_hidden_size
+    padded_input = tf.pad(question_embeddings, [
+        [0, 0], [filter_width - 1, 0], [0, 0]])
+    with tf.variable_scope('convolutions'):
+        Wz = tf.get_variable('Wz', [filter_width, in_fmaps, out_fmaps],
+                             initializer=tf.random_uniform_initializer(minval=-.05, maxval=.05))
+        z_a = tf.nn.conv1d(padded_input, Wz, stride=1, padding='VALID')
+        Z = tf.nn.tanh(z_a)
+        Wf = tf.get_variable('Wf',
+                             [filter_width, in_fmaps, out_fmaps],
+                             initializer=tf.random_uniform_initializer(minval=-.05, maxval=.05))
+        f_a = tf.nn.conv1d(padded_input, Wf, stride=1, padding='VALID')
+        F = tf.sigmoid(f_a)
+        T = tf.concat([Z, F], 2)
+    with tf.variable_scope('pooling'):
+        pooling = QRNN_f_pooling(out_fmaps)
+        H, last_C = tf.nn.dynamic_rnn(pooling, T)
+    return H, last_C
+
+
 class Baseline(object):
     def __init__(self, train_dataset, val_dataset, embedding, vocabulary, batch_size=128):
         self.train_dataset = train_dataset
@@ -94,47 +165,20 @@ class Baseline(object):
                 self.embedding, self.contexts)
 
         with tf.variable_scope("question_embedding_layer"):
-            lstm_cell_fw = tf.nn.rnn_cell.GRUCell(
-                self.lstm_hidden_size, name="gru_cell_fw")
-            lstm_cell_fw = tf.contrib.rnn.DropoutWrapper(
-                lstm_cell_fw, input_keep_prob=self.keep_prob)
-            lstm_cell_bw = tf.nn.rnn_cell.GRUCell(
-                self.lstm_hidden_size, name="gru_cell_bw")
-            lstm_cell_bw = tf.contrib.rnn.DropoutWrapper(
-                lstm_cell_bw, input_keep_prob=self.keep_prob)
-
-            (question_output_fw, question_output_bw), (question_output_final_fw, question_output_final_bw) = tf.nn.bidirectional_dynamic_rnn(
-                lstm_cell_fw, lstm_cell_bw, question_embeddings, sequence_length=question_lengths, dtype=tf.float32, time_major=False)
-
-            question_output = tf.concat(
-                [question_output_fw, question_output_bw], 2)
+            question_output, _ = bilstm(
+                question_embeddings, question_lengths, self.lstm_hidden_size, self.keep_prob)
 
         with tf.variable_scope("context_embedding_layer"):
-            lstm_cell_fw = tf.nn.rnn_cell.GRUCell(
-                self.lstm_hidden_size, name="gru_cell_fw")
-            lstm_cell_fw = tf.contrib.rnn.DropoutWrapper(
-                lstm_cell_fw, input_keep_prob=self.keep_prob)
-            lstm_cell_bw = tf.nn.rnn_cell.GRUCell(
-                self.lstm_hidden_size, name="gru_cell_bw")
-            lstm_cell_bw = tf.contrib.rnn.DropoutWrapper(
-                lstm_cell_bw, input_keep_prob=self.keep_prob)
+            context_output, _ = bilstm(
+                context_embeddings, context_lengths, self.lstm_hidden_size, self.keep_prob)
 
-            (context_output_fw, context_output_bw), context_output_final = tf.nn.bidirectional_dynamic_rnn(
-                lstm_cell_fw, lstm_cell_bw, context_embeddings, sequence_length=context_lengths,
-                dtype=tf.float32, time_major=False, initial_state_fw=question_output_final_fw,
-                initial_state_bw=question_output_final_bw)
-
-            context_output = tf.concat(
-                [context_output_fw, context_output_bw], 2)
+            d = context_output.get_shape().as_list()[-1]
 
             # context_output dimension is BS * max_context_length * d
             # where d = 2*lstm_hidden_size
 
         with tf.variable_scope("attention_layer"):
-            d = context_output.get_shape().as_list()[-1]
             # d is equal to 2*self.lstm_hidden_size
-            W_s = tf.get_variable("W_s", shape=[3*d, 1])
-            # ici ajouter dropout
 
             question_tiled = tf.tile(tf.expand_dims(
                 question_output, 1), [1, max_context_length, 1, 1])
@@ -145,15 +189,8 @@ class Baseline(object):
             product_tiled = tf.reshape(tf.reshape(question_tiled, [-1, d]) * tf.reshape(
                 context_tiled, [-1, d]), [-1, max_context_length, max_question_length, d])
             print('product_tiled', product_tiled.get_shape().as_list())
-            concat_tiled = tf.concat(
-                [question_tiled, context_tiled, product_tiled], axis=3)
-            print('concat_tiled', concat_tiled.get_shape().as_list())
 
-            similarity_matrix = tf.matmul(tf.reshape(
-                concat_tiled, [-1, 3*d]), W_s)
-            print('similarity_matrix', similarity_matrix.get_shape().as_list())
-            similarity_matrix = tf.reshape(
-                similarity_matrix, [-1, max_context_length, max_question_length])
+            similarity_matrix = tf.reduce_sum(product_tiled, axis=3)
             print('similarity_matrix', similarity_matrix.get_shape().as_list())
 
             context_mask_aug = tf.tile(tf.expand_dims(context_mask, 2), [
@@ -176,74 +213,20 @@ class Baseline(object):
                 context_to_query_attention_weights, question_output)
             print('context_to_query', context_to_query.get_shape().as_list())
 
-            max_col_similarity = tf.reduce_max(similarity_matrix, axis=2)
-            print('max_col_similarity', max_col_similarity.get_shape().as_list())
-
-            b = tf.nn.softmax(max_col_similarity, axis=1)
-            print('b', b.get_shape().as_list())
-
-            b = tf.expand_dims(b, 1)
-            print('b', b.get_shape().as_list())
-
-            query_to_context_single = tf.matmul(b, context_output)
-            print('query_to_context_single',
-                  query_to_context_single.get_shape().as_list())
-
-            query_to_context = tf.tile(
-                query_to_context_single, [1, max_context_length, 1])
-            print('query_to_context', query_to_context.get_shape().as_list())
-
-            context_output_with_context_to_query = tf.reshape(tf.reshape(
-                context_output, [-1, d]) * tf.reshape(context_to_query, [-1, d]), [-1, max_context_length, d])
-            print('context_output_with_context_to_query',
-                  context_output_with_context_to_query.get_shape().as_list())
-
-            context_output_with_query_to_context = tf.reshape(tf.reshape(
-                context_output, [-1, d]) * tf.reshape(query_to_context, [-1, d]), [-1, max_context_length, d])
-            print('context_output_with_query_to_context',
-                  context_output_with_query_to_context.get_shape().as_list())
-
-            attention = tf.concat([context_output, context_to_query,
-                                   context_output_with_context_to_query, context_output_with_query_to_context], axis=2)
+            attention = tf.concat([context_output, context_to_query], axis=2)
             print('attention', attention.get_shape().as_list())
 
         with tf.variable_scope("modeling_layer"):
-            lstm_cell_fw_m1 = tf.nn.rnn_cell.GRUCell(
-                self.lstm_hidden_size, name="gru_cell_fw_m1")
-            lstm_cell_fw_m1 = tf.contrib.rnn.DropoutWrapper(
-                lstm_cell_fw_m1, input_keep_prob=self.keep_prob)
-            lstm_cell_bw_m1 = tf.nn.rnn_cell.GRUCell(
-                self.lstm_hidden_size, name="gru_cell_bw_m1")
-            lstm_cell_bw_m1 = tf.contrib.rnn.DropoutWrapper(
-                lstm_cell_bw_m1, input_keep_prob=self.keep_prob)
-            (m1_fw, m1_bw), _ = tf.nn.bidirectional_dynamic_rnn(
-                lstm_cell_fw_m1, lstm_cell_bw_m1, attention, sequence_length=context_lengths, dtype=tf.float32, time_major=False)
-            m1 = tf.concat(
-                [m1_fw, m1_bw], 2)
-
-            lstm_cell_fw_m2 = tf.nn.rnn_cell.GRUCell(
-                self.lstm_hidden_size, name="gru_cell_fw_m2")
-            lstm_cell_fw_m2 = tf.contrib.rnn.DropoutWrapper(
-                lstm_cell_fw_m2, input_keep_prob=self.keep_prob)
-            lstm_cell_bw_m2 = tf.nn.rnn_cell.GRUCell(
-                self.lstm_hidden_size, name="gru_cell_bw_m2")
-            lstm_cell_bw_m2 = tf.contrib.rnn.DropoutWrapper(
-                lstm_cell_bw_m2, input_keep_prob=self.keep_prob)
-            (m2_fw, m2_bw), _ = tf.nn.bidirectional_dynamic_rnn(
-                lstm_cell_fw_m2, lstm_cell_bw_m2, m1, sequence_length=context_lengths, dtype=tf.float32, time_major=False)
-            m2 = tf.concat(
-                [m2_fw, m2_bw], 2)
+            m1 = bilstm(attention, context_lengths,
+                        self.lstm_hidden_size, self.keep_prob)
 
         with tf.variable_scope("output_layer_start"):
-            final_context_start = tf.concat([attention, m2], axis=2)
-            print('final_context_start',
-                  final_context_start.get_shape().as_list())
             W1 = tf.get_variable("W1", initializer=tf.contrib.layers.xavier_initializer(
-            ), shape=(5*d, 1), dtype=tf.float32)
+            ), shape=(d, 1), dtype=tf.float32)
             print('W1',
                   W1.get_shape().as_list())
             pred_start = tf.matmul(tf.reshape(
-                final_context_start, shape=[-1, 5*d]), W1)
+                m1, shape=[-1, d]), W1)
             print('pred_start',
                   pred_start.get_shape().as_list())
             pred_start = tf.reshape(
@@ -255,23 +238,10 @@ class Baseline(object):
                   self.pred_start.get_shape().as_list())
 
         with tf.variable_scope("output_layer_end"):
-            lstm_cell_fw = tf.nn.rnn_cell.GRUCell(
-                self.lstm_hidden_size, name="gru_cell_fw")
-            lstm_cell_fw = tf.contrib.rnn.DropoutWrapper(
-                lstm_cell_fw, input_keep_prob=self.keep_prob)
-            lstm_cell_bw = tf.nn.rnn_cell.GRUCell(
-                self.lstm_hidden_size, name="gru_cell_bw")
-            lstm_cell_bw = tf.contrib.rnn.DropoutWrapper(
-                lstm_cell_bw, input_keep_prob=self.keep_prob)
-            (m3_fw, m3_bw), _ = tf.nn.bidirectional_dynamic_rnn(
-                lstm_cell_fw, lstm_cell_bw, m2, sequence_length=context_lengths, dtype=tf.float32, time_major=False)
-            m3 = tf.concat(
-                [m3_fw, m3_bw], 2)
             W2 = tf.get_variable("W2", initializer=tf.contrib.layers.xavier_initializer(
-            ), shape=(5*d, 1), dtype=tf.float32)
-            final_context_end = tf.concat([attention, m3], axis=2)
+            ), shape=(d, 1), dtype=tf.float32)
             pred_end = tf.matmul(tf.reshape(
-                final_context_end, shape=[-1, 5*d]), W2)
+                m1, shape=[-1, d]), W2)
             pred_end = tf.reshape(
                 pred_end, shape=[-1, max_context_length])
             self.pred_end = preprocess_softmax(pred_end, context_mask)
@@ -430,7 +400,7 @@ if __name__ == '__main__':
     # a = sess.run([x])
     # print(x.output_shapes, a)
 
-    machine = Baseline(train_dataset, val_dataset,
-                       embedding, vocabulary, batch_size=20)
-    machine.build()
-    machine.train(10)
+    # machine = Baseline(train_dataset, val_dataset,
+    #                   embedding, vocabulary, batch_size=64)
+    # machine.build()
+    # machine.train(10)

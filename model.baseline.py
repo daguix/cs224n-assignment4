@@ -96,12 +96,12 @@ class Baseline(object):
         with tf.variable_scope("question_embedding_layer"):
             lstm_cell_fw = tf.nn.rnn_cell.GRUCell(
                 self.lstm_hidden_size, name="gru_cell_fw")
-            # lstm_cell_fw = tf.contrib.rnn.DropoutWrapper(
-            #    lstm_cell_fw, input_keep_prob=self.keep_prob)
+            lstm_cell_fw = tf.nn.rnn_cell.DropoutWrapper(
+                lstm_cell_fw, input_keep_prob=self.keep_prob)
             lstm_cell_bw = tf.nn.rnn_cell.GRUCell(
                 self.lstm_hidden_size, name="gru_cell_bw")
-            # lstm_cell_bw = tf.contrib.rnn.DropoutWrapper(
-            #    lstm_cell_bw, input_keep_prob=self.keep_prob)
+            lstm_cell_bw = tf.nn.rnn_cell.DropoutWrapper(
+                lstm_cell_bw, input_keep_prob=self.keep_prob)
 
             (question_output_fw, question_output_bw), (question_output_final_fw, question_output_final_bw) = tf.nn.bidirectional_dynamic_rnn(
                 lstm_cell_fw, lstm_cell_bw, question_embeddings, sequence_length=question_lengths, dtype=tf.float32, time_major=False)
@@ -112,11 +112,11 @@ class Baseline(object):
         with tf.variable_scope("context_embedding_layer"):
             lstm_cell_fw = tf.nn.rnn_cell.GRUCell(
                 self.lstm_hidden_size, name="gru_cell_fw")
-            lstm_cell_fw = tf.contrib.rnn.DropoutWrapper(
+            lstm_cell_fw = tf.nn.rnn_cell.DropoutWrapper(
                 lstm_cell_fw, input_keep_prob=self.keep_prob)
             lstm_cell_bw = tf.nn.rnn_cell.GRUCell(
                 self.lstm_hidden_size, name="gru_cell_bw")
-            lstm_cell_bw = tf.contrib.rnn.DropoutWrapper(
+            lstm_cell_bw = tf.nn.rnn_cell.DropoutWrapper(
                 lstm_cell_bw, input_keep_prob=self.keep_prob)
 
             (context_output_fw, context_output_bw), context_output_final = tf.nn.bidirectional_dynamic_rnn(
@@ -127,11 +127,12 @@ class Baseline(object):
             context_output = tf.concat(
                 [context_output_fw, context_output_bw], 2)
 
+            d = context_output.get_shape().as_list()[-1]
+
             # context_output dimension is BS * max_context_length * d
             # where d = 2*lstm_hidden_size
 
         with tf.variable_scope("attention_layer"):
-            d = context_output.get_shape().as_list()[-1]
             # d is equal to 2*self.lstm_hidden_size
 
             question_tiled = tf.tile(tf.expand_dims(
@@ -173,16 +174,17 @@ class Baseline(object):
         with tf.variable_scope("modeling_layer"):
             lstm_cell_fw_m1 = tf.nn.rnn_cell.GRUCell(
                 self.lstm_hidden_size, name="gru_cell_fw_m1")
-            # lstm_cell_fw_m1 = tf.contrib.rnn.DropoutWrapper(
-            #    lstm_cell_fw_m1, input_keep_prob=self.keep_prob)
+            lstm_cell_fw_m1 = tf.nn.rnn_cell.DropoutWrapper(
+                lstm_cell_fw_m1, input_keep_prob=self.keep_prob)
             lstm_cell_bw_m1 = tf.nn.rnn_cell.GRUCell(
                 self.lstm_hidden_size, name="gru_cell_bw_m1")
-            # lstm_cell_bw_m1 = tf.contrib.rnn.DropoutWrapper(
-            #    lstm_cell_bw_m1, input_keep_prob=self.keep_prob)
+            lstm_cell_bw_m1 = tf.nn.rnn_cell.DropoutWrapper(
+                lstm_cell_bw_m1, input_keep_prob=self.keep_prob)
             (m1_fw, m1_bw), _ = tf.nn.bidirectional_dynamic_rnn(
                 lstm_cell_fw_m1, lstm_cell_bw_m1, attention, sequence_length=context_lengths, dtype=tf.float32, time_major=False)
             m1 = tf.concat(
                 [m1_fw, m1_bw], 2)
+            m1 = tf.nn.dropout(m1, keep_prob=self.keep_prob)
 
         with tf.variable_scope("output_layer_start"):
             W1 = tf.get_variable("W1", initializer=tf.contrib.layers.xavier_initializer(
