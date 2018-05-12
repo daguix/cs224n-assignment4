@@ -93,20 +93,22 @@ class QRNN_f_pooling(tf.nn.rnn_cell.RNNCell):
         inputs: 2-D tensor of shape [batch_size, Zfeats + [gates]]
         """
         # pool_type = self.__pool_type
-        # print('QRNN pooling inputs shape: ', inputs.get_shape())
-        # print('QRNN pooling state shape: ', state.get_shape())
+        print('QRNN pooling inputs shape: ', inputs.get_shape())
+        print('QRNN pooling state shape: ', state.get_shape())
         with tf.variable_scope(scope or "QRNN-f-pooling"):
                 # extract Z activations and F gate activations
-            Z, F = tf.split(1, 2, inputs)
+            Z, F = tf.split(inputs, 2, 1)
+            print('QRNN pooling Z shape: ', Z.get_shape())
+            print('QRNN pooling F shape: ', F.get_shape())
             # return the dynamic average pooling
             output = tf.multiply(F, state) + tf.multiply(tf.subtract(1., F), Z)
             return output, output
 
 
-def qrnn(question_embeddings, question_lengths, lstm_hidden_size):
+def qrnn_f(question_embeddings, question_lengths, hidden_size, keep_prob=1.0):
     filter_width = 2
     in_fmaps = question_embeddings.get_shape().as_list()[-1]
-    out_fmaps = lstm_hidden_size
+    out_fmaps = hidden_size
     padded_input = tf.pad(question_embeddings, [
         [0, 0], [filter_width - 1, 0], [0, 0]])
     with tf.variable_scope('convolutions'):
@@ -121,9 +123,13 @@ def qrnn(question_embeddings, question_lengths, lstm_hidden_size):
         F = tf.sigmoid(f_a)
         T = tf.concat([Z, F], 2)
     with tf.variable_scope('pooling'):
-        pooling = QRNN_f_pooling(out_fmaps)
-        H, last_C = tf.nn.dynamic_rnn(pooling, T)
-    return H, last_C
+        pooling_fw = QRNN_f_pooling(out_fmaps)
+        question_output, question_output_final = tf.nn.dynamic_rnn(
+            pooling_fw, T, sequence_length=question_lengths, dtype=tf.float32)
+        print('question_output', question_output.get_shape().as_list())
+        print('question_output_final', question_output_final.get_shape().as_list())
+
+    return (question_output, question_output_final)
 
 
 class Baseline(object):
@@ -142,16 +148,19 @@ class Baseline(object):
         self.train_max_context_length = 744
         self.train_max_question_length = 60
 
+    def encoder(self, embeddings, lengths, hidden_size, keep_prob=1.0):
+        return bilstm(embeddings, lengths, hidden_size, keep_prob)
+
     def pred(self):
         with tf.variable_scope("embedding_layer"):
             (self.questions, question_lengths), (self.contexts,
                                                  context_lengths), self.answers = self.iterator.get_next()
 
-            max_context_length = tf.reduce_max(context_lengths)
-            max_question_length = tf.reduce_max(question_lengths)
+            # max_context_length = tf.reduce_max(context_lengths)
+            # max_question_length = tf.reduce_max(question_lengths)
 
-            #max_context_length = self.train_max_context_length
-            #max_question_length = self.train_max_question_length
+            max_context_length = self.train_max_context_length
+            max_question_length = self.train_max_question_length
 
             context_mask = tf.sequence_mask(
                 context_lengths, maxlen=max_context_length)
@@ -165,11 +174,11 @@ class Baseline(object):
                 self.embedding, self.contexts)
 
         with tf.variable_scope("question_embedding_layer"):
-            question_output, _ = bilstm(
-                question_embeddings, question_lengths, self.lstm_hidden_size, self.keep_prob)
+            question_output, _ = self.encoder(
+                question_embeddings, question_lengths, self.lstm_hidden_size, keep_prob=self.keep_prob)
 
         with tf.variable_scope("context_embedding_layer"):
-            context_output, _ = bilstm(
+            context_output, _ = self.encoder(
                 context_embeddings, context_lengths, self.lstm_hidden_size, self.keep_prob)
 
             d = context_output.get_shape().as_list()[-1]
@@ -217,8 +226,9 @@ class Baseline(object):
             print('attention', attention.get_shape().as_list())
 
         with tf.variable_scope("modeling_layer"):
-            m1 = bilstm(attention, context_lengths,
-                        self.lstm_hidden_size, self.keep_prob)
+            m1, _ = self.encoder(attention, context_lengths,
+                                 self.lstm_hidden_size, self.keep_prob)
+            print('m1', m1.get_shape().as_list())
 
         with tf.variable_scope("output_layer_start"):
             W1 = tf.get_variable("W1", initializer=tf.contrib.layers.xavier_initializer(
@@ -270,9 +280,9 @@ class Baseline(object):
         self.optimize()
 
     def get_data(self):
-        padded_shapes = ((tf.TensorShape([None]),  # question of unknown size
+        padded_shapes = ((tf.TensorShape([self.train_max_question_length]),  # question of unknown size
                           tf.TensorShape([])),  # size(question)
-                         (tf.TensorShape([None]),  # context of unknown size
+                         (tf.TensorShape([self.train_max_context_length]),  # context of unknown size
                           tf.TensorShape([])),  # size(context)
                          tf.TensorShape([2]))
 
@@ -400,7 +410,7 @@ if __name__ == '__main__':
     # a = sess.run([x])
     # print(x.output_shapes, a)
 
-    # machine = Baseline(train_dataset, val_dataset,
-    #                   embedding, vocabulary, batch_size=64)
-    # machine.build()
-    # machine.train(10)
+    machine = Baseline(train_dataset, val_dataset,
+                       embedding, vocabulary, batch_size=64)
+    machine.build()
+    machine.train(10)

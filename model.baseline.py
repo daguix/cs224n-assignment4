@@ -55,6 +55,154 @@ def preprocess_softmax(tensor, mask):
     return tf.where(mask, tensor, penalty_value)
 
 
+def bilstm(question_embeddings, question_lengths, lstm_hidden_size, keep_prob=1.0):
+    lstm_cell_fw = tf.nn.rnn_cell.GRUCell(
+        lstm_hidden_size, name="gru_cell_fw")
+    lstm_cell_fw = tf.nn.rnn_cell.DropoutWrapper(
+        lstm_cell_fw, input_keep_prob=keep_prob)
+    lstm_cell_bw = tf.nn.rnn_cell.GRUCell(
+        lstm_hidden_size, name="gru_cell_bw")
+    lstm_cell_bw = tf.nn.rnn_cell.DropoutWrapper(
+        lstm_cell_bw, input_keep_prob=keep_prob)
+
+    (question_output_fw, question_output_bw), (question_output_final_fw, question_output_final_bw) = tf.nn.bidirectional_dynamic_rnn(
+        lstm_cell_fw, lstm_cell_bw, question_embeddings, sequence_length=question_lengths, dtype=tf.float32, time_major=False)
+
+    question_output = tf.concat(
+        [question_output_fw, question_output_bw], 2)
+
+    question_output_final = tf.concat(
+        [question_output_final_fw, question_output_final_bw], 1)
+    return (question_output, question_output_final)
+
+
+class QRNN_f_pooling(tf.nn.rnn_cell.RNNCell):
+    def __init__(self, out_fmaps):
+        self.__out_fmaps = out_fmaps
+
+    @property
+    def state_size(self):
+        return self.__out_fmaps
+
+    @property
+    def output_size(self):
+        return self.__out_fmaps
+
+    def __call__(self, inputs, state, scope=None):
+        """
+        inputs: 2-D tensor of shape [batch_size, Zfeats + [gates]]
+        """
+        # pool_type = self.__pool_type
+        print('QRNN pooling inputs shape: ', inputs.get_shape())
+        print('QRNN pooling state shape: ', state.get_shape())
+        with tf.variable_scope(scope or "QRNN-f-pooling"):
+                # extract Z activations and F gate activations
+            Z, F = tf.split(inputs, 2, 1)
+            print('QRNN pooling Z shape: ', Z.get_shape())
+            print('QRNN pooling F shape: ', F.get_shape())
+            # return the dynamic average pooling
+            output = tf.multiply(F, state) + tf.multiply(tf.subtract(1., F), Z)
+            return output, output
+
+
+class QRNN_fo_pooling(tf.nn.rnn_cell.RNNCell):
+    def __init__(self, out_fmaps):
+        self.__out_fmaps = out_fmaps
+
+    @property
+    def state_size(self):
+        return self.__out_fmaps
+
+    @property
+    def output_size(self):
+        return self.__out_fmaps
+
+    def __call__(self, inputs, state, scope=None):
+        """
+        inputs: 2-D tensor of shape [batch_size, Zfeats + [gates]]
+        """
+        # pool_type = self.__pool_type
+        print('QRNN pooling inputs shape: ', inputs.get_shape())
+        print('QRNN pooling state shape: ', state.get_shape())
+        with tf.variable_scope(scope or "QRNN-f-pooling"):
+                # extract Z activations and F gate activations
+            Z, F, O = tf.split(inputs, 3, 1)
+            print('QRNN pooling Z shape: ', Z.get_shape())
+            print('QRNN pooling F shape: ', F.get_shape())
+            print('QRNN pooling O shape: ', O.get_shape())
+            # return the dynamic average pooling
+            new_state = tf.multiply(F, state) + \
+                tf.multiply(tf.subtract(1., F), Z)
+            output = tf.multiply(O, new_state)
+            return output, new_state
+
+
+def bi_qrnn_f(question_embeddings, question_lengths, hidden_size, keep_prob=1.0):
+    filter_width = 2
+    in_fmaps = question_embeddings.get_shape().as_list()[-1]
+    out_fmaps = hidden_size
+    padded_input = tf.pad(question_embeddings, [
+        [0, 0], [filter_width - 1, 0], [0, 0]])
+    with tf.variable_scope('convolutions'):
+        Wz = tf.get_variable('Wz', [filter_width, in_fmaps, out_fmaps],
+                             initializer=tf.random_uniform_initializer(minval=-.05, maxval=.05))
+        z_a = tf.nn.conv1d(padded_input, Wz, stride=1, padding='VALID')
+        Z = tf.nn.tanh(z_a)
+        Wf = tf.get_variable('Wf',
+                             [filter_width, in_fmaps, out_fmaps],
+                             initializer=tf.random_uniform_initializer(minval=-.05, maxval=.05))
+        f_a = tf.nn.conv1d(padded_input, Wf, stride=1, padding='VALID')
+        F = tf.sigmoid(f_a)
+        T = tf.concat([Z, F], 2)
+    with tf.variable_scope('pooling'):
+        pooling_fw = QRNN_f_pooling(out_fmaps)
+        pooling_bw = QRNN_f_pooling(out_fmaps)
+        (question_output_fw, question_output_bw), (question_output_final_fw, question_output_final_bw) = tf.nn.bidirectional_dynamic_rnn(
+            pooling_fw, pooling_bw, T, sequence_length=question_lengths, dtype=tf.float32)
+        question_output = tf.concat(
+            [question_output_fw, question_output_bw], 2)
+
+        question_output_final = tf.concat(
+            [question_output_final_fw, question_output_final_bw], 1)
+    return (question_output, question_output_final)
+
+
+def bi_qrnn_fo(question_embeddings, question_lengths, hidden_size, keep_prob=1.0):
+    filter_width = 2
+    in_fmaps = question_embeddings.get_shape().as_list()[-1]
+    out_fmaps = hidden_size
+    padded_input = tf.pad(question_embeddings, [
+        [0, 0], [filter_width - 1, 0], [0, 0]])
+    with tf.variable_scope('convolutions'):
+        Wz = tf.get_variable('Wz', [filter_width, in_fmaps, out_fmaps],
+                             initializer=tf.random_uniform_initializer(minval=-.05, maxval=.05))
+        z_a = tf.nn.conv1d(padded_input, Wz, stride=1, padding='VALID')
+        Z = tf.nn.tanh(z_a)
+        Wf = tf.get_variable('Wf',
+                             [filter_width, in_fmaps, out_fmaps],
+                             initializer=tf.random_uniform_initializer(minval=-.05, maxval=.05))
+        f_a = tf.nn.conv1d(padded_input, Wf, stride=1, padding='VALID')
+        F = tf.sigmoid(f_a)
+        # zoneout to implement here
+        Wo = tf.get_variable('Wo',
+                             [filter_width, in_fmaps, out_fmaps],
+                             initializer=tf.random_uniform_initializer(minval=-.05, maxval=.05))
+        f_o = tf.nn.conv1d(padded_input, Wo, stride=1, padding='VALID')
+        O = tf.sigmoid(f_o)
+        T = tf.concat([Z, F, O], 2)
+    with tf.variable_scope('pooling'):
+        pooling_fw = QRNN_fo_pooling(out_fmaps)
+        pooling_bw = QRNN_fo_pooling(out_fmaps)
+        (question_output_fw, question_output_bw), (question_output_final_fw, question_output_final_bw) = tf.nn.bidirectional_dynamic_rnn(
+            pooling_fw, pooling_bw, T, sequence_length=question_lengths, dtype=tf.float32)
+        question_output = tf.concat(
+            [question_output_fw, question_output_bw], 2)
+
+        question_output_final = tf.concat(
+            [question_output_final_fw, question_output_final_bw], 1)
+    return (question_output, question_output_final)
+
+
 class Baseline(object):
     def __init__(self, train_dataset, val_dataset, embedding, vocabulary, batch_size=128):
         self.train_dataset = train_dataset
@@ -70,6 +218,9 @@ class Baseline(object):
         self.keep_prob = tf.placeholder(tf.float32, shape=[])
         self.train_max_context_length = 744
         self.train_max_question_length = 60
+
+    def encoder(self, embeddings, lengths, hidden_size, keep_prob=1.0):
+        return bi_qrnn_fo(embeddings, lengths, hidden_size, keep_prob)
 
     def pred(self):
         with tf.variable_scope("embedding_layer"):
@@ -94,38 +245,12 @@ class Baseline(object):
                 self.embedding, self.contexts)
 
         with tf.variable_scope("question_embedding_layer"):
-            lstm_cell_fw = tf.nn.rnn_cell.GRUCell(
-                self.lstm_hidden_size, name="gru_cell_fw")
-            lstm_cell_fw = tf.nn.rnn_cell.DropoutWrapper(
-                lstm_cell_fw, input_keep_prob=self.keep_prob)
-            lstm_cell_bw = tf.nn.rnn_cell.GRUCell(
-                self.lstm_hidden_size, name="gru_cell_bw")
-            lstm_cell_bw = tf.nn.rnn_cell.DropoutWrapper(
-                lstm_cell_bw, input_keep_prob=self.keep_prob)
-
-            (question_output_fw, question_output_bw), (question_output_final_fw, question_output_final_bw) = tf.nn.bidirectional_dynamic_rnn(
-                lstm_cell_fw, lstm_cell_bw, question_embeddings, sequence_length=question_lengths, dtype=tf.float32, time_major=False)
-
-            question_output = tf.concat(
-                [question_output_fw, question_output_bw], 2)
+            question_output, _ = self.encoder(
+                question_embeddings, question_lengths, self.lstm_hidden_size, keep_prob=self.keep_prob)
 
         with tf.variable_scope("context_embedding_layer"):
-            lstm_cell_fw = tf.nn.rnn_cell.GRUCell(
-                self.lstm_hidden_size, name="gru_cell_fw")
-            lstm_cell_fw = tf.nn.rnn_cell.DropoutWrapper(
-                lstm_cell_fw, input_keep_prob=self.keep_prob)
-            lstm_cell_bw = tf.nn.rnn_cell.GRUCell(
-                self.lstm_hidden_size, name="gru_cell_bw")
-            lstm_cell_bw = tf.nn.rnn_cell.DropoutWrapper(
-                lstm_cell_bw, input_keep_prob=self.keep_prob)
-
-            (context_output_fw, context_output_bw), context_output_final = tf.nn.bidirectional_dynamic_rnn(
-                lstm_cell_fw, lstm_cell_bw, context_embeddings, sequence_length=context_lengths,
-                dtype=tf.float32, time_major=False, initial_state_fw=question_output_final_fw,
-                initial_state_bw=question_output_final_bw)
-
-            context_output = tf.concat(
-                [context_output_fw, context_output_bw], 2)
+            context_output, _ = self.encoder(
+                context_embeddings, context_lengths, self.lstm_hidden_size, self.keep_prob)
 
             d = context_output.get_shape().as_list()[-1]
 
@@ -172,19 +297,9 @@ class Baseline(object):
             print('attention', attention.get_shape().as_list())
 
         with tf.variable_scope("modeling_layer"):
-            lstm_cell_fw_m1 = tf.nn.rnn_cell.GRUCell(
-                self.lstm_hidden_size, name="gru_cell_fw_m1")
-            lstm_cell_fw_m1 = tf.nn.rnn_cell.DropoutWrapper(
-                lstm_cell_fw_m1, input_keep_prob=self.keep_prob)
-            lstm_cell_bw_m1 = tf.nn.rnn_cell.GRUCell(
-                self.lstm_hidden_size, name="gru_cell_bw_m1")
-            lstm_cell_bw_m1 = tf.nn.rnn_cell.DropoutWrapper(
-                lstm_cell_bw_m1, input_keep_prob=self.keep_prob)
-            (m1_fw, m1_bw), _ = tf.nn.bidirectional_dynamic_rnn(
-                lstm_cell_fw_m1, lstm_cell_bw_m1, attention, sequence_length=context_lengths, dtype=tf.float32, time_major=False)
-            m1 = tf.concat(
-                [m1_fw, m1_bw], 2)
-            m1 = tf.nn.dropout(m1, keep_prob=self.keep_prob)
+            m1, _ = self.encoder(attention, context_lengths,
+                                 self.lstm_hidden_size, self.keep_prob)
+            print('m1', m1.get_shape().as_list())
 
         with tf.variable_scope("output_layer_start"):
             W1 = tf.get_variable("W1", initializer=tf.contrib.layers.xavier_initializer(
@@ -367,6 +482,6 @@ if __name__ == '__main__':
     # print(x.output_shapes, a)
 
     machine = Baseline(train_dataset, val_dataset,
-                       embedding, vocabulary, batch_size=64)
+                       embedding, vocabulary, batch_size=128)
     machine.build()
     machine.train(10)
