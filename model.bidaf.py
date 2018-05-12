@@ -224,11 +224,11 @@ class Baseline(object):
             (self.questions, question_lengths), (self.contexts,
                                                  context_lengths), self.answers = self.iterator.get_next()
 
-            # max_context_length = tf.reduce_max(context_lengths)
-            # max_question_length = tf.reduce_max(question_lengths)
+            max_context_length = tf.reduce_max(context_lengths)
+            max_question_length = tf.reduce_max(question_lengths)
 
-            max_context_length = self.train_max_context_length
-            max_question_length = self.train_max_question_length
+            #max_context_length = self.train_max_context_length
+            #max_question_length = self.train_max_question_length
 
             context_mask = tf.sequence_mask(
                 context_lengths, maxlen=max_context_length)
@@ -348,9 +348,9 @@ class Baseline(object):
         self.optimize()
 
     def get_data(self):
-        padded_shapes = ((tf.TensorShape([self.train_max_question_length]),  # question of unknown size
+        padded_shapes = ((tf.TensorShape([None]),  # question of unknown size
                           tf.TensorShape([])),  # size(question)
-                         (tf.TensorShape([self.train_max_context_length]),  # context of unknown size
+                         (tf.TensorShape([None]),  # context of unknown size
                           tf.TensorShape([])),  # size(context)
                          tf.TensorShape([2]))
 
