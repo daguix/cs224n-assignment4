@@ -76,6 +76,58 @@ def bilstm(question_embeddings, question_lengths, lstm_hidden_size, keep_prob=1.
     return (question_output, question_output_final)
 
 
+def zoneout(x, keep_prob, noise_shape=None, seed=None, name=None):
+    """Computes zoneout (including dropout without scaling).
+    With probability `keep_prob`.
+    By default, each element is kept or dropped independently.  If `noise_shape`
+    is specified, it must be
+    [broadcastable](http://docs.scipy.org/doc/numpy/user/basics.broadcasting.html)
+    to the shape of `x`, and only dimensions with `noise_shape[i] == shape(x)[i]`
+    will make independent decisions.  For example, if `shape(x) = [k, l, m, n]`
+    and `noise_shape = [k, 1, 1, n]`, each batch and channel component will be
+    kept independently and each row and column will be kept or not kept together.
+    Args:
+      x: A tensor.
+      keep_prob: A scalar `Tensor` with the same type as x. The probability
+        that each element is kept.
+      noise_shape: A 1-D `Tensor` of type `int32`, representing the
+        shape for randomly generated keep/drop flags.
+      seed: A Python integer. Used to create random seeds. See
+        [`set_random_seed`](../../api_docs/python/constant_op.md#set_random_seed)
+        for behavior.
+      name: A name for this operation (optional).
+    Returns:
+      A Tensor of the same shape of `x`.
+    Raises:
+      ValueError: If `keep_prob` is not in `(0, 1]`.
+    """
+    with tf.name_scope(name or "dropout") as name:
+        x = ops.convert_to_tensor(x, name="x")
+        if isinstance(keep_prob, numbers.Real) and not 0 < keep_prob <= 1:
+            raise ValueError("keep_prob must be a scalar tensor or a float in the "
+                             "range (0, 1], got %g" % keep_prob)
+        keep_prob = ops.convert_to_tensor(keep_prob,
+                                          dtype=x.dtype,
+                                          name="keep_prob")
+        keep_prob.get_shape().assert_is_compatible_with(tensor_shape.scalar())
+
+        # Do nothing if we know keep_prob == 1
+        if tensor_util.constant_value(keep_prob) == 1:
+            return x
+
+        noise_shape = noise_shape if noise_shape is not None else array_ops.shape(
+            x)
+        # uniform [keep_prob, 1.0 + keep_prob)
+        random_tensor = keep_prob
+        random_tensor += random_ops.random_uniform(noise_shape,
+                                                   seed=seed,
+                                                   dtype=x.dtype)
+        # 0. if [keep_prob, 1.0) and 1. if [1.0, 1.0 + keep_prob)
+        binary_tensor = math_ops.floor(random_tensor)
+        ret = x * binary_tensor
+        return ret.set_shape(x.get_shape())
+
+
 class QRNN_fo_pooling(tf.nn.rnn_cell.RNNCell):
     def __init__(self, out_fmaps):
         self.__out_fmaps = out_fmaps
@@ -95,7 +147,7 @@ class QRNN_fo_pooling(tf.nn.rnn_cell.RNNCell):
         # pool_type = self.__pool_type
         print('QRNN pooling inputs shape: ', inputs.get_shape())
         print('QRNN pooling state shape: ', state.get_shape())
-        with tf.variable_scope(scope or "QRNN-f-pooling"):
+        with tf.variable_scope(scope or "QRNN-fo-pooling"):
                 # extract Z activations and F gate activations
             Z, F, O = tf.split(inputs, 3, 1)
             print('QRNN pooling Z shape: ', Z.get_shape())
@@ -153,6 +205,7 @@ def qrnn_f(question_embeddings, question_lengths, hidden_size, keep_prob=1.0):
                              initializer=tf.random_uniform_initializer(minval=-.05, maxval=.05))
         f_a = tf.nn.conv1d(padded_input, Wf, stride=1, padding='VALID')
         F = tf.sigmoid(f_a)
+        F = 1. - zoneout((1. - F), keep_prob)
         T = tf.concat([Z, F], 2)
     with tf.variable_scope('pooling'):
         pooling_fw = QRNN_f_pooling(out_fmaps)
@@ -180,7 +233,7 @@ def bi_qrnn_fo(question_embeddings, question_lengths, hidden_size, keep_prob=1.0
                              initializer=tf.random_uniform_initializer(minval=-.05, maxval=.05))
         f_a = tf.nn.conv1d(padded_input, Wf, stride=1, padding='VALID')
         F = tf.sigmoid(f_a)
-        # zoneout to implement here
+        F = 1. - zoneout((1. - F), keep_prob)
         Wo = tf.get_variable('Wo',
                              [filter_width, in_fmaps, out_fmaps],
                              initializer=tf.random_uniform_initializer(minval=-.05, maxval=.05))
