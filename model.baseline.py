@@ -260,29 +260,16 @@ class Baseline(object):
         with tf.variable_scope("attention_layer"):
             # d is equal to 2*self.lstm_hidden_size
 
-            question_tiled = tf.tile(tf.expand_dims(
-                question_output, 1), [1, max_context_length, 1, 1])
-            print('question_tiled', question_tiled.get_shape().as_list())
-            context_tiled = tf.tile(tf.expand_dims(
-                context_output, 2), [1, 1, max_question_length, 1])
-            print('context_tiled', context_tiled.get_shape().as_list())
-            product_tiled = tf.reshape(tf.reshape(question_tiled, [-1, d]) * tf.reshape(
-                context_tiled, [-1, d]), [-1, max_context_length, max_question_length, d])
-            print('product_tiled', product_tiled.get_shape().as_list())
-
-            similarity_matrix = tf.reduce_sum(product_tiled, axis=3)
+            similarity_matrix = tf.matmul(context_output, tf.transpose(
+                question_output, [0, 2, 1]))
             print('similarity_matrix', similarity_matrix.get_shape().as_list())
 
-            context_mask_aug = tf.tile(tf.expand_dims(context_mask, 2), [
-                                       1, 1, max_question_length])
-            question_mask_aug = tf.tile(tf.expand_dims(
-                question_mask, 1), [1, max_context_length, 1])
+            mask_aug = tf.expand_dims(context_mask, 2) & tf.expand_dims(
+                question_mask, 1)
 
-            mask_aug = context_mask_aug & question_mask_aug
-
-            similarity_matrix = preprocess_softmax(
-                similarity_matrix, mask_aug)
-            print('similarity_matrix', similarity_matrix.get_shape().as_list())
+            # similarity_matrix = preprocess_softmax(
+            #    similarity_matrix, mask_aug)
+            #print('similarity_matrix', similarity_matrix.get_shape().as_list())
 
             context_to_query_attention_weights = tf.nn.softmax(
                 similarity_matrix, axis=2)

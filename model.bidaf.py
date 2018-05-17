@@ -281,7 +281,7 @@ class Baseline(object):
         self.train_max_question_length = 60
 
     def encoder(self, embeddings, lengths, hidden_size, keep_prob=1.0):
-        return bi_qrnn_fo(embeddings, lengths, hidden_size, keep_prob)
+        return bilstm(embeddings, lengths, hidden_size, keep_prob)
 
     def pred(self):
         with tf.variable_scope("embedding_layer"):
@@ -321,25 +321,12 @@ class Baseline(object):
         with tf.variable_scope("attention_layer"):
             # d is equal to 2*self.lstm_hidden_size
 
-            question_tiled = tf.tile(tf.expand_dims(
-                question_output, 1), [1, max_context_length, 1, 1])
-            print('question_tiled', question_tiled.get_shape().as_list())
-            context_tiled = tf.tile(tf.expand_dims(
-                context_output, 2), [1, 1, max_question_length, 1])
-            print('context_tiled', context_tiled.get_shape().as_list())
-            product_tiled = tf.reshape(tf.reshape(question_tiled, [-1, d]) * tf.reshape(
-                context_tiled, [-1, d]), [-1, max_context_length, max_question_length, d])
-            print('product_tiled', product_tiled.get_shape().as_list())
-
-            similarity_matrix = tf.reduce_sum(product_tiled, axis=3)
+            similarity_matrix = tf.matmul(context_output, tf.transpose(
+                question_output, [0, 2, 1]))
             print('similarity_matrix', similarity_matrix.get_shape().as_list())
 
-            context_mask_aug = tf.tile(tf.expand_dims(context_mask, 2), [
-                                       1, 1, max_question_length])
-            question_mask_aug = tf.tile(tf.expand_dims(
-                question_mask, 1), [1, max_context_length, 1])
-
-            mask_aug = context_mask_aug & question_mask_aug
+            mask_aug = tf.expand_dims(
+                context_mask, 2) & tf.expand_dims(question_mask, 1)
 
             similarity_matrix = preprocess_softmax(
                 similarity_matrix, mask_aug)
@@ -354,7 +341,29 @@ class Baseline(object):
                 context_to_query_attention_weights, question_output)
             print('context_to_query', context_to_query.get_shape().as_list())
 
-            attention = tf.concat([context_output, context_to_query], axis=2)
+            max_col_similarity = tf.reduce_max(similarity_matrix, axis=2)
+            print('max_col_similarity', max_col_similarity.get_shape().as_list())
+
+            b = tf.nn.softmax(max_col_similarity, axis=1)
+            print('b', b.get_shape().as_list())
+
+            b = tf.expand_dims(b, 1)
+            print('b', b.get_shape().as_list())
+
+            query_to_context = tf.matmul(b, context_output)
+            print('query_to_context',
+                  query_to_context.get_shape().as_list())
+
+            context_output_with_context_to_query = context_output * context_to_query
+            print('context_output_with_context_to_query',
+                  context_output_with_context_to_query.get_shape().as_list())
+
+            context_output_with_query_to_context = context_output * query_to_context
+            print('context_output_with_query_to_context',
+                  context_output_with_query_to_context.get_shape().as_list())
+
+            attention = tf.concat([context_output, context_to_query,
+                                   context_output_with_context_to_query, context_output_with_query_to_context], axis=2)
             print('attention', attention.get_shape().as_list())
 
         with tf.variable_scope("modeling_layer"):
@@ -476,7 +485,6 @@ class Baseline(object):
                     try:
                         total_loss, opt = sess.run(
                             [self.total_loss, self.opt], feed_dict={self.handle: self.train_iterator_handle, self.keep_prob: 0.75})  # , options=options, run_metadata=run_metadata)
-
                         progress.update(index, [("training loss", total_loss)])
 
                     except tf.errors.OutOfRangeError:
