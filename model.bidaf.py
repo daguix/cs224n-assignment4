@@ -281,7 +281,7 @@ class Baseline(object):
         self.train_max_question_length = 60
 
     def encoder(self, embeddings, lengths, hidden_size, keep_prob=1.0):
-        return bilstm(embeddings, lengths, hidden_size, keep_prob)
+        return bi_qrnn_fo(embeddings, lengths, hidden_size, keep_prob)
 
     def pred(self):
         with tf.variable_scope("embedding_layer"):
