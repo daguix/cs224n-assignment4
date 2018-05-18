@@ -461,7 +461,7 @@ class Baseline(object):
                 self.train_eval_iterator.string_handle())
 
             sess.run(tf.global_variables_initializer())
-            #writer = tf.summary.FileWriter(
+            # writer = tf.summary.FileWriter(
             #    'graphs/attention1', sess.graph)
             initial_step = self.gstep.eval()
             sess.run(self.val_iterator.initializer)
@@ -515,7 +515,7 @@ class Baseline(object):
                 print(evaluate(predictions, ground_truths))
                 predictions = []
                 ground_truths = []
-            writer.close()
+            # writer.close()
 
 
 if __name__ == '__main__':
@@ -551,6 +551,6 @@ if __name__ == '__main__':
     # print(x.output_shapes, a)
 
     machine = Baseline(train_dataset, val_dataset,
-                       embedding, vocabulary, batch_size=64)
+                       embedding, vocabulary, batch_size=128)
     machine.build()
     machine.train(10)

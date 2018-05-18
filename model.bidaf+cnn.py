@@ -12,6 +12,12 @@ from evaluate import evaluate
 import numbers
 from evaluate import evaluate
 from tensorflow.contrib.layers import xavier_initializer
+from tensorflow.python.framework import tensor_shape
+from tensorflow.python.framework import tensor_util
+from tensorflow.python.ops import array_ops
+from tensorflow.python.ops import random_ops
+from tensorflow.python.ops import math_ops
+from tensorflow.python.framework import ops
 from layers import residual_block
 
 DATA_DIR = "./data/squad"
