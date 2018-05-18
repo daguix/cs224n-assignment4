@@ -399,8 +399,7 @@ class Baseline(object):
                                 num_filters=self.lstm_hidden_size,
                                 num_heads=1,
                                 seq_len=max_question_length,
-                                scope="Encoder_Residual_Block",
-                                reuse=True,  # Share the weights between passage and question
+                                scope="Modeling_Block",  # Share the weights between passage and question
                                 bias=False,
                                 dropout=1.0 - self.keep_prob)
             print('m1', m1.get_shape().as_list())
