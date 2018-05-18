@@ -125,25 +125,19 @@ def residual_block(inputs, num_blocks, num_conv_layers, kernel_size, mask=None,
 def conv_block(inputs, num_conv_layers, kernel_size, num_filters,
                seq_len=None, scope="conv_block", is_training=True,
                reuse=None, bias=True, dropout=0.0, sublayers=(1, 1)):
-    print('## residual_block')
+    print('## conv_block')
     with tf.variable_scope(scope, reuse=reuse):
         outputs = tf.expand_dims(inputs, 2)
-        print('outputs', outputs.get_shape().as_list())
         l, L = sublayers
         for i in range(num_conv_layers):
             residual = outputs
-            print('residual', residual.get_shape().as_list())
             outputs = norm_fn(outputs, scope="layer_norm_%d" % i, reuse=reuse)
-            print('outputs', outputs.get_shape().as_list())
             if (i) % 2 == 0:
                 outputs = tf.nn.dropout(outputs, 1.0 - dropout)
-                print('outputs', outputs.get_shape().as_list())
             outputs = depthwise_separable_convolution(outputs,
                                                       kernel_size=(kernel_size, 1), num_filters=num_filters,
                                                       scope="depthwise_conv_layers_%d" % i, is_training=is_training, reuse=reuse)
-            print('outputs', outputs.get_shape().as_list())
             outputs = layer_dropout(outputs, residual, dropout * float(l) / L)
-            print('outputs', outputs.get_shape().as_list())
             l += 1
         return tf.squeeze(outputs, 2), l
 
