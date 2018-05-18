@@ -18,7 +18,7 @@ from tensorflow.python.ops import array_ops
 from tensorflow.python.ops import random_ops
 from tensorflow.python.ops import math_ops
 from tensorflow.python.framework import ops
-from layers import residual_block
+from layers import residual_block, conv
 
 DATA_DIR = "./data/squad"
 
@@ -391,7 +391,8 @@ class Baseline(object):
             print('attention', attention.get_shape().as_list())
 
         with tf.variable_scope("modeling_layer"):
-            self.enc = [conv(attention, self.lstm_hidden_size, name="input_projection")]
+            self.enc = [conv(attention, self.lstm_hidden_size,
+                             name="input_projection")]
             for i in range(3):
                 if i % 2 == 0:  # dropout every 2 blocks
                     self.enc[i] = tf.nn.dropout(
