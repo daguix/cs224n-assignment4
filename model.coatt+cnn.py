@@ -18,6 +18,7 @@ from tensorflow.python.ops import array_ops
 from tensorflow.python.ops import random_ops
 from tensorflow.python.ops import math_ops
 from tensorflow.python.framework import ops
+from layers import residual_block, conv, optimized_trilinear_for_attention, mask_logits
 
 DATA_DIR = "./data/squad"
 
@@ -61,7 +62,7 @@ def convert_indices_to_text(vocabulary, context, start, end):
 
 def preprocess_softmax(tensor, mask):
     inverse_mask = tf.subtract(tf.constant(1.0), tf.cast(mask, tf.float32))
-    penalty_value = tf.multiply(inverse_mask, tf.constant(-1e9))
+    penalty_value = tf.multiply(inverse_mask, tf.constant(-1e30))
     return tf.where(mask, tensor, penalty_value)
 
 
@@ -270,7 +271,7 @@ class Baseline(object):
         self.val_dataset = val_dataset
         self.embedding = embedding
         self.batch_size = batch_size
-        self.lr = 0.001
+        self.lr = 0.005
         self.gstep = tf.Variable(0, dtype=tf.int32,
                                  trainable=False, name='global_step')
         self.lstm_hidden_size = 100
@@ -304,84 +305,84 @@ class Baseline(object):
                 self.embedding, self.questions)
             context_embeddings = tf.nn.embedding_lookup(
                 self.embedding, self.contexts)
+            print('question_embeddings',
+                  question_embeddings.get_shape().as_list())
+            print('context_embeddings',
+                  context_embeddings.get_shape().as_list())
 
-        with tf.variable_scope("question_embedding_layer"):
-            question_output, _ = self.encoder(
-                question_embeddings, question_lengths, self.lstm_hidden_size, keep_prob=self.keep_prob)
+        with tf.variable_scope("embedding_layer"):
+            c = residual_block(context_embeddings,
+                               num_blocks=1,
+                               num_conv_layers=1,
+                               kernel_size=7,
+                               mask=context_mask,
+                               num_filters=self.lstm_hidden_size,
+                               num_heads=1,
+                               seq_len=max_context_length,
+                               scope="Encoder_Residual_Block",
+                               bias=False,
+                               dropout=1.0 - self.keep_prob)
+            print('c',
+                  c.get_shape().as_list())
+            q = residual_block(question_embeddings,
+                               num_blocks=1,
+                               num_conv_layers=1,
+                               kernel_size=7,
+                               mask=question_mask,
+                               num_filters=self.lstm_hidden_size,
+                               num_heads=1,
+                               seq_len=max_question_length,
+                               scope="Encoder_Residual_Block",
+                               reuse=True,  # Share the weights between passage and question
+                               bias=False,
+                               dropout=1.0 - self.keep_prob)
 
-        with tf.variable_scope("context_embedding_layer"):
-            context_output, _ = self.encoder(
-                context_embeddings, context_lengths, self.lstm_hidden_size, self.keep_prob)
-
-            d = context_output.get_shape().as_list()[-1]
-
+            print('q',
+                  q.get_shape().as_list())
             # context_output dimension is BS * max_context_length * d
             # where d = 2*lstm_hidden_size
 
         with tf.variable_scope("attention_layer"):
-            # d is equal to 2*self.lstm_hidden_size
 
-            similarity_matrix = tf.matmul(context_output, tf.transpose(
-                question_output, [0, 2, 1]))
-            print('similarity_matrix', similarity_matrix.get_shape().as_list())
-
-            mask_aug = tf.expand_dims(
-                context_mask, 2) & tf.expand_dims(question_mask, 1)
-
-            similarity_matrix = preprocess_softmax(
-                similarity_matrix, mask_aug)
-            print('similarity_matrix', similarity_matrix.get_shape().as_list())
-
-            context_to_query_attention_weights = tf.nn.softmax(
-                similarity_matrix, axis=2)
-            print('context_to_query_attention_weights',
-                  context_to_query_attention_weights.get_shape().as_list())
-
-            context_to_query = tf.matmul(
-                context_to_query_attention_weights, question_output)
-            print('context_to_query', context_to_query.get_shape().as_list())
-
-            max_col_similarity = tf.reduce_max(similarity_matrix, axis=2)
-            print('max_col_similarity', max_col_similarity.get_shape().as_list())
-
-            b = tf.nn.softmax(max_col_similarity, axis=1)
-            print('b', b.get_shape().as_list())
-
-            b = tf.expand_dims(b, 1)
-            print('b', b.get_shape().as_list())
-
-            query_to_context = tf.matmul(b, context_output)
-            print('query_to_context',
-                  query_to_context.get_shape().as_list())
-
-            context_output_with_context_to_query = context_output * context_to_query
-            print('context_output_with_context_to_query',
-                  context_output_with_context_to_query.get_shape().as_list())
-
-            context_output_with_query_to_context = context_output * query_to_context
-            print('context_output_with_query_to_context',
-                  context_output_with_query_to_context.get_shape().as_list())
-
-            attention = tf.concat([context_output, context_to_query,
-                                   context_output_with_context_to_query, context_output_with_query_to_context], axis=2)
-            print('attention', attention.get_shape().as_list())
+            S = optimized_trilinear_for_attention(
+                [c, q], max_context_length, max_question_length, input_keep_prob=self.keep_prob)
+            mask_q = tf.expand_dims(question_mask, 1)
+            S_ = tf.nn.softmax(mask_logits(S, mask=mask_q))
+            mask_c = tf.expand_dims(context_mask, 2)
+            S_T = tf.transpose(tf.nn.softmax(
+                mask_logits(S, mask=mask_c), dim=1), (0, 2, 1))
+            self.c2q = tf.matmul(S_, q)
+            self.q2c = tf.matmul(tf.matmul(S_, S_T), c)
+            attention_outputs = [c, self.c2q, c * self.c2q, c * self.q2c]
 
         with tf.variable_scope("modeling_layer"):
-            m1, _ = self.encoder(attention, context_lengths,
-                                 self.lstm_hidden_size, self.keep_prob)
-            print('m1', m1.get_shape().as_list())
+            attention = tf.concat(attention_outputs, axis=-1)
+            self.enc = [conv(attention, self.lstm_hidden_size,
+                             name="input_projection")]
+            for i in range(3):
+                if i % 2 == 0:  # dropout every 2 blocks
+                    self.enc[i] = tf.nn.dropout(
+                        self.enc[i], self.keep_prob)
+                self.enc.append(
+                    residual_block(self.enc[i],
+                                   num_blocks=1,
+                                   num_conv_layers=1,
+                                   kernel_size=5,
+                                   mask=context_mask,
+                                   num_filters=self.lstm_hidden_size,
+                                   num_heads=1,
+                                   seq_len=max_context_length,
+                                   scope="Model_Encoder",
+                                   bias=False,
+                                   reuse=True if i > 0 else None,
+                                   dropout=1.0 - self.keep_prob)
+                )
+                print('self.enc[i]',
+                      self.enc[i].get_shape().as_list())
 
         with tf.variable_scope("output_layer_start"):
-            W1 = tf.get_variable("W1", initializer=tf.contrib.layers.xavier_initializer(
-            ), shape=(d, 1), dtype=tf.float32)
-            print('W1',
-                  W1.get_shape().as_list())
-            pred_start = tf.matmul(tf.reshape(
-                m1, shape=[-1, d]), W1)
-            print('pred_start',
-                  pred_start.get_shape().as_list())
-            pred_start = tf.reshape(
-                pred_start, shape=[-1, max_context_length])
+            pred_start = tf.squeeze(conv(tf.concat(
+                [self.enc[1], self.enc[2]], axis=-1), 1, bias=False, name="start_pointer"), -1)
             print('pred_start',
                   pred_start.get_shape().as_list())
             self.pred_start = preprocess_softmax(pred_start, context_mask)
@@ -389,13 +390,13 @@ class Baseline(object):
                   self.pred_start.get_shape().as_list())
 
         with tf.variable_scope("output_layer_end"):
-            W2 = tf.get_variable("W2", initializer=tf.contrib.layers.xavier_initializer(
-            ), shape=(d, 1), dtype=tf.float32)
-            pred_end = tf.matmul(tf.reshape(
-                m1, shape=[-1, d]), W2)
-            pred_end = tf.reshape(
-                pred_end, shape=[-1, max_context_length])
+            pred_end = tf.squeeze(conv(tf.concat(
+                [self.enc[1], self.enc[3]], axis=-1), 1, bias=False, name="end_pointer"), -1)
+            print('pred_end',
+                  pred_end.get_shape().as_list())
             self.pred_end = preprocess_softmax(pred_end, context_mask)
+            print('self.pred_end',
+                  self.pred_end.get_shape().as_list())
 
             self.preds = tf.transpose(
                 [tf.argmax(self.pred_start, axis=1), tf.argmax(self.pred_end, axis=1)])
@@ -484,7 +485,7 @@ class Baseline(object):
                     index += 1
                     try:
                         total_loss, opt = sess.run(
-                            [self.total_loss, self.opt], feed_dict={self.handle: self.train_iterator_handle, self.keep_prob: 0.9})  # , options=options, run_metadata=run_metadata)
+                            [self.total_loss, self.opt], feed_dict={self.handle: self.train_iterator_handle, self.keep_prob: 0.75})  # , options=options, run_metadata=run_metadata)
                         progress.update(index, [("training loss", total_loss)])
 
                     except tf.errors.OutOfRangeError:
@@ -551,6 +552,6 @@ if __name__ == '__main__':
     # print(x.output_shapes, a)
 
     machine = Baseline(train_dataset, val_dataset,
-                       embedding, vocabulary, batch_size=128)
+                       embedding, vocabulary, batch_size=32)
     machine.build()
     machine.train(10)
