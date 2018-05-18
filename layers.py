@@ -108,27 +108,17 @@ def residual_block(inputs, num_blocks, num_conv_layers, kernel_size, mask=None,
         if input_projection:
             inputs = conv(inputs, num_filters,
                           name="input_projection", reuse=reuse)
-            print('inputs if input_projection',
-                  inputs.get_shape().as_list())
         outputs = inputs
-        print('outputs',
-              outputs.get_shape().as_list())
         sublayer = 1
         total_sublayers = (num_conv_layers + 2) * num_blocks
         for i in range(num_blocks):
             outputs = add_timing_signal_1d(outputs)
-            print('outputs',
-                  outputs.get_shape().as_list())
             outputs, sublayer = conv_block(outputs, num_conv_layers, kernel_size, num_filters,
                                            seq_len=seq_len, scope="encoder_block_%d" % i, reuse=reuse, bias=bias,
                                            dropout=dropout, sublayers=(sublayer, total_sublayers))
-            print('outputs',
-                  outputs.get_shape().as_list())
             outputs, sublayer = self_attention_block(outputs, num_filters, seq_len, mask=mask, num_heads=num_heads,
                                                      scope="self_attention_layers%d" % i, reuse=reuse, is_training=is_training,
                                                      bias=bias, dropout=dropout, sublayers=(sublayer, total_sublayers))
-            print('outputs',
-                  outputs.get_shape().as_list())
         return outputs
 
 
