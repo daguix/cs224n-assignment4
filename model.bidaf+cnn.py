@@ -411,19 +411,10 @@ class Baseline(object):
                                    reuse=True if i > 0 else None,
                                    dropout=1.0 - self.keep_prob)
                 )
-            d = m1.get_shape().as_list()[-1]
 
         with tf.variable_scope("output_layer_start"):
-            W1 = tf.get_variable("W1", initializer=tf.contrib.layers.xavier_initializer(
-            ), shape=(d, 1), dtype=tf.float32)
-            print('W1',
-                  W1.get_shape().as_list())
-            pred_start = tf.matmul(tf.reshape(
-                m1, shape=[-1, d]), W1)
-            print('pred_start',
-                  pred_start.get_shape().as_list())
-            pred_start = tf.reshape(
-                pred_start, shape=[-1, max_context_length])
+            pred_start = tf.squeeze(conv(tf.concat(
+                [self.enc[1], self.enc[2]], axis=-1), 1, bias=False, name="start_pointer"), -1)
             print('pred_start',
                   pred_start.get_shape().as_list())
             self.pred_start = preprocess_softmax(pred_start, context_mask)
@@ -431,13 +422,13 @@ class Baseline(object):
                   self.pred_start.get_shape().as_list())
 
         with tf.variable_scope("output_layer_end"):
-            W2 = tf.get_variable("W2", initializer=tf.contrib.layers.xavier_initializer(
-            ), shape=(d, 1), dtype=tf.float32)
-            pred_end = tf.matmul(tf.reshape(
-                m1, shape=[-1, d]), W2)
-            pred_end = tf.reshape(
-                pred_end, shape=[-1, max_context_length])
+            pred_end = tf.squeeze(conv(tf.concat(
+                [self.enc[1], self.enc[3]], axis=-1), 1, bias=False, name="end_pointer"), -1)
+            print('pred_end',
+                  pred_end.get_shape().as_list())
             self.pred_end = preprocess_softmax(pred_end, context_mask)
+            print('self.pred_end',
+                  self.pred_end.get_shape().as_list())
 
             self.preds = tf.transpose(
                 [tf.argmax(self.pred_start, axis=1), tf.argmax(self.pred_end, axis=1)])
