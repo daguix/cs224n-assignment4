@@ -391,18 +391,25 @@ class Baseline(object):
             print('attention', attention.get_shape().as_list())
 
         with tf.variable_scope("modeling_layer"):
-            m1 = residual_block(attention,
-                                num_blocks=1,
-                                num_conv_layers=4,
-                                kernel_size=7,
-                                mask=question_mask,
-                                num_filters=4*self.lstm_hidden_size,
-                                num_heads=1,
-                                seq_len=max_question_length,
-                                scope="Modeling_Block",  # Share the weights between passage and question
-                                bias=False,
-                                dropout=1.0 - self.keep_prob)
-            print('m1', m1.get_shape().as_list())
+            self.enc = [conv(attention, self.lstm_hidden_size, name="input_projection")]
+            for i in range(3):
+                if i % 2 == 0:  # dropout every 2 blocks
+                    self.enc[i] = tf.nn.dropout(
+                        self.enc[i], 1.0 - self.dropout)
+                self.enc.append(
+                    residual_block(self.enc[i],
+                                   num_blocks=7,
+                                   num_conv_layers=2,
+                                   kernel_size=5,
+                                   mask=context_mask,
+                                   num_filters=self.lstm_hidden_size,
+                                   num_heads=1,
+                                   seq_len=max_context_length,
+                                   scope="Model_Encoder",
+                                   bias=False,
+                                   reuse=True if i > 0 else None,
+                                   dropout=1.0 - self.keep_prob)
+                )
             d = m1.get_shape().as_list()[-1]
 
         with tf.variable_scope("output_layer_start"):
