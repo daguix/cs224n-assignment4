@@ -396,7 +396,7 @@ class Baseline(object):
             for i in range(3):
                 if i % 2 == 0:  # dropout every 2 blocks
                     self.enc[i] = tf.nn.dropout(
-                        self.enc[i], 1.0 - self.dropout)
+                        self.enc[i], self.keep_prob)
                 self.enc.append(
                     residual_block(self.enc[i],
                                    num_blocks=7,
