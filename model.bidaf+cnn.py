@@ -289,11 +289,11 @@ class Baseline(object):
             (self.questions, question_lengths), (self.contexts,
                                                  context_lengths), self.answers = self.iterator.get_next()
 
-            #max_context_length = tf.reduce_max(context_lengths)
-            #max_question_length = tf.reduce_max(question_lengths)
+            max_context_length = tf.reduce_max(context_lengths)
+            max_question_length = tf.reduce_max(question_lengths)
 
-            max_context_length = self.train_max_context_length
-            max_question_length = self.train_max_question_length
+            #max_context_length = self.train_max_context_length
+            #max_question_length = self.train_max_question_length
 
             context_mask = tf.sequence_mask(
                 context_lengths, maxlen=max_context_length)
@@ -391,8 +391,18 @@ class Baseline(object):
             print('attention', attention.get_shape().as_list())
 
         with tf.variable_scope("modeling_layer"):
-            m1, _ = self.encoder(attention, context_lengths,
-                                 self.lstm_hidden_size, self.keep_prob)
+            m1 = residual_block(attention,
+                                num_blocks=1,
+                                num_conv_layers=4,
+                                kernel_size=7,
+                                mask=question_mask,
+                                num_filters=self.lstm_hidden_size,
+                                num_heads=1,
+                                seq_len=max_question_length,
+                                scope="Encoder_Residual_Block",
+                                reuse=True,  # Share the weights between passage and question
+                                bias=False,
+                                dropout=1.0 - self.keep_prob)
             print('m1', m1.get_shape().as_list())
             d = m1.get_shape().as_list()[-1]
 
@@ -446,9 +456,9 @@ class Baseline(object):
         self.optimize()
 
     def get_data(self):
-        padded_shapes = ((tf.TensorShape([self.train_max_question_length]),  # question of unknown size
+        padded_shapes = ((tf.TensorShape([None]),  # question of unknown size
                           tf.TensorShape([])),  # size(question)
-                         (tf.TensorShape([self.train_max_context_length]),  # context of unknown size
+                         (tf.TensorShape([None]),  # context of unknown size
                           tf.TensorShape([])),  # size(context)
                          tf.TensorShape([2]))
 
@@ -459,7 +469,7 @@ class Baseline(object):
         # train_evaluation = self.train_dataset.
 
         train_eval_batch = self.train_dataset.shuffle(10000).padded_batch(
-            self.batch_size, padded_shapes=padded_shapes, padding_values=padding_values)
+            500, padded_shapes=padded_shapes, padding_values=padding_values)
 
         val_batch = self.val_dataset.shuffle(10000).padded_batch(
             500, padded_shapes=padded_shapes, padding_values=padding_values).prefetch(1)
@@ -540,7 +550,7 @@ class Baseline(object):
                 print(evaluate(predictions, ground_truths))
                 predictions = []
                 ground_truths = []
-            writer.close()
+            # writer.close()
 
 
 if __name__ == '__main__':

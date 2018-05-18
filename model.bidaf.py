@@ -434,7 +434,7 @@ class Baseline(object):
         # train_evaluation = self.train_dataset.
 
         train_eval_batch = self.train_dataset.shuffle(10000).padded_batch(
-            self.batch_size, padded_shapes=padded_shapes, padding_values=padding_values)
+            500, padded_shapes=padded_shapes, padding_values=padding_values)
 
         val_batch = self.val_dataset.shuffle(10000).padded_batch(
             500, padded_shapes=padded_shapes, padding_values=padding_values).prefetch(1)
