@@ -396,7 +396,7 @@ class Baseline(object):
                                 num_conv_layers=4,
                                 kernel_size=7,
                                 mask=question_mask,
-                                num_filters=self.lstm_hidden_size,
+                                num_filters=4*self.lstm_hidden_size,
                                 num_heads=1,
                                 seq_len=max_question_length,
                                 scope="Modeling_Block",  # Share the weights between passage and question
