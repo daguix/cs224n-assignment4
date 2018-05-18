@@ -9,6 +9,11 @@ from utils import Progbar
 
 from evaluate import evaluate
 
+import numbers
+from evaluate import evaluate
+from tensorflow.contrib.layers import xavier_initializer
+from layers import residual_block
+
 DATA_DIR = "./data/squad"
 
 
@@ -76,6 +81,91 @@ def bilstm(question_embeddings, question_lengths, lstm_hidden_size, keep_prob=1.
     return (question_output, question_output_final)
 
 
+def zoneout(x, keep_prob, noise_shape=None, seed=None, name=None):
+    """Computes zoneout (including dropout without scaling).
+    With probability `keep_prob`.
+    By default, each element is kept or dropped independently.  If `noise_shape`
+    is specified, it must be
+    [broadcastable](http://docs.scipy.org/doc/numpy/user/basics.broadcasting.html)
+    to the shape of `x`, and only dimensions with `noise_shape[i] == shape(x)[i]`
+    will make independent decisions.  For example, if `shape(x) = [k, l, m, n]`
+    and `noise_shape = [k, 1, 1, n]`, each batch and channel component will be
+    kept independently and each row and column will be kept or not kept together.
+    Args:
+      x: A tensor.
+      keep_prob: A scalar `Tensor` with the same type as x. The probability
+        that each element is kept.
+      noise_shape: A 1-D `Tensor` of type `int32`, representing the
+        shape for randomly generated keep/drop flags.
+      seed: A Python integer. Used to create random seeds. See
+        [`set_random_seed`](../../api_docs/python/constant_op.md#set_random_seed)
+        for behavior.
+      name: A name for this operation (optional).
+    Returns:
+      A Tensor of the same shape of `x`.
+    Raises:
+      ValueError: If `keep_prob` is not in `(0, 1]`.
+    """
+    with tf.name_scope(name or "dropout") as name:
+        x = ops.convert_to_tensor(x, name="x")
+        if isinstance(keep_prob, numbers.Real) and not 0 < keep_prob <= 1:
+            raise ValueError("keep_prob must be a scalar tensor or a float in the "
+                             "range (0, 1], got %g" % keep_prob)
+        keep_prob = ops.convert_to_tensor(keep_prob,
+                                          dtype=x.dtype,
+                                          name="keep_prob")
+        keep_prob.get_shape().assert_is_compatible_with(tensor_shape.scalar())
+
+        # Do nothing if we know keep_prob == 1
+        if tensor_util.constant_value(keep_prob) == 1:
+            return x
+
+        noise_shape = noise_shape if noise_shape is not None else array_ops.shape(
+            x)
+        # uniform [keep_prob, 1.0 + keep_prob)
+        random_tensor = keep_prob
+        random_tensor += random_ops.random_uniform(noise_shape,
+                                                   seed=seed,
+                                                   dtype=x.dtype)
+        # 0. if [keep_prob, 1.0) and 1. if [1.0, 1.0 + keep_prob)
+        binary_tensor = math_ops.floor(random_tensor)
+        ret = x * binary_tensor
+        ret.set_shape(x.get_shape())
+        return 1. - ret
+
+
+class QRNN_fo_pooling(tf.nn.rnn_cell.RNNCell):
+    def __init__(self, out_fmaps):
+        self.__out_fmaps = out_fmaps
+
+    @property
+    def state_size(self):
+        return self.__out_fmaps
+
+    @property
+    def output_size(self):
+        return self.__out_fmaps
+
+    def __call__(self, inputs, state, scope=None):
+        """
+        inputs: 2-D tensor of shape [batch_size, Zfeats + [gates]]
+        """
+        # pool_type = self.__pool_type
+        print('QRNN pooling inputs shape: ', inputs.get_shape())
+        print('QRNN pooling state shape: ', state.get_shape())
+        with tf.variable_scope(scope or "QRNN-fo-pooling"):
+                # extract Z activations and F gate activations
+            Z, F, O = tf.split(inputs, 3, 1)
+            print('QRNN pooling Z shape: ', Z.get_shape())
+            print('QRNN pooling F shape: ', F.get_shape())
+            print('QRNN pooling O shape: ', O.get_shape())
+            # return the dynamic average pooling
+            new_state = tf.multiply(F, state) + \
+                tf.multiply(tf.subtract(1., F), Z)
+            output = tf.multiply(O, new_state)
+            return output, new_state
+
+
 class QRNN_f_pooling(tf.nn.rnn_cell.RNNCell):
     def __init__(self, out_fmaps):
         self.__out_fmaps = out_fmaps
@@ -105,39 +195,7 @@ class QRNN_f_pooling(tf.nn.rnn_cell.RNNCell):
             return output, output
 
 
-class QRNN_fo_pooling(tf.nn.rnn_cell.RNNCell):
-    def __init__(self, out_fmaps):
-        self.__out_fmaps = out_fmaps
-
-    @property
-    def state_size(self):
-        return self.__out_fmaps
-
-    @property
-    def output_size(self):
-        return self.__out_fmaps
-
-    def __call__(self, inputs, state, scope=None):
-        """
-        inputs: 2-D tensor of shape [batch_size, Zfeats + [gates]]
-        """
-        # pool_type = self.__pool_type
-        print('QRNN pooling inputs shape: ', inputs.get_shape())
-        print('QRNN pooling state shape: ', state.get_shape())
-        with tf.variable_scope(scope or "QRNN-f-pooling"):
-                # extract Z activations and F gate activations
-            Z, F, O = tf.split(inputs, 3, 1)
-            print('QRNN pooling Z shape: ', Z.get_shape())
-            print('QRNN pooling F shape: ', F.get_shape())
-            print('QRNN pooling O shape: ', O.get_shape())
-            # return the dynamic average pooling
-            new_state = tf.multiply(F, state) + \
-                tf.multiply(tf.subtract(1., F), Z)
-            output = tf.multiply(O, new_state)
-            return output, new_state
-
-
-def bi_qrnn_f(question_embeddings, question_lengths, hidden_size, keep_prob=1.0):
+def qrnn_f(question_embeddings, question_lengths, hidden_size, keep_prob=1.0):
     filter_width = 2
     in_fmaps = question_embeddings.get_shape().as_list()[-1]
     out_fmaps = hidden_size
@@ -153,17 +211,15 @@ def bi_qrnn_f(question_embeddings, question_lengths, hidden_size, keep_prob=1.0)
                              initializer=tf.random_uniform_initializer(minval=-.05, maxval=.05))
         f_a = tf.nn.conv1d(padded_input, Wf, stride=1, padding='VALID')
         F = tf.sigmoid(f_a)
+        F = zoneout((1. - F), keep_prob)
         T = tf.concat([Z, F], 2)
     with tf.variable_scope('pooling'):
         pooling_fw = QRNN_f_pooling(out_fmaps)
-        pooling_bw = QRNN_f_pooling(out_fmaps)
-        (question_output_fw, question_output_bw), (question_output_final_fw, question_output_final_bw) = tf.nn.bidirectional_dynamic_rnn(
-            pooling_fw, pooling_bw, T, sequence_length=question_lengths, dtype=tf.float32)
-        question_output = tf.concat(
-            [question_output_fw, question_output_bw], 2)
+        question_output, question_output_final = tf.nn.dynamic_rnn(
+            pooling_fw, T, sequence_length=question_lengths, dtype=tf.float32)
+        print('question_output', question_output.get_shape().as_list())
+        print('question_output_final', question_output_final.get_shape().as_list())
 
-        question_output_final = tf.concat(
-            [question_output_final_fw, question_output_final_bw], 1)
     return (question_output, question_output_final)
 
 
@@ -183,7 +239,7 @@ def bi_qrnn_fo(question_embeddings, question_lengths, hidden_size, keep_prob=1.0
                              initializer=tf.random_uniform_initializer(minval=-.05, maxval=.05))
         f_a = tf.nn.conv1d(padded_input, Wf, stride=1, padding='VALID')
         F = tf.sigmoid(f_a)
-        # zoneout to implement here
+        F = zoneout((1. - F), keep_prob)
         Wo = tf.get_variable('Wo',
                              [filter_width, in_fmaps, out_fmaps],
                              initializer=tf.random_uniform_initializer(minval=-.05, maxval=.05))
@@ -227,11 +283,11 @@ class Baseline(object):
             (self.questions, question_lengths), (self.contexts,
                                                  context_lengths), self.answers = self.iterator.get_next()
 
-            max_context_length = tf.reduce_max(context_lengths)
-            max_question_length = tf.reduce_max(question_lengths)
+            #max_context_length = tf.reduce_max(context_lengths)
+            #max_question_length = tf.reduce_max(question_lengths)
 
-            #max_context_length = self.train_max_context_length
-            #max_question_length = self.train_max_question_length
+            max_context_length = self.train_max_context_length
+            max_question_length = self.train_max_question_length
 
             context_mask = tf.sequence_mask(
                 context_lengths, maxlen=max_context_length)
@@ -243,17 +299,40 @@ class Baseline(object):
                 self.embedding, self.questions)
             context_embeddings = tf.nn.embedding_lookup(
                 self.embedding, self.contexts)
+            print('question_embeddings',
+                  question_embeddings.get_shape().as_list())
+            print('context_embeddings',
+                  context_embeddings.get_shape().as_list())
 
-        with tf.variable_scope("question_embedding_layer"):
-            question_output, _ = self.encoder(
-                question_embeddings, question_lengths, self.lstm_hidden_size, keep_prob=self.keep_prob)
+        with tf.variable_scope("embedding_layer"):
+            context_output = residual_block(context_embeddings,
+                                            num_blocks=1,
+                                            num_conv_layers=4,
+                                            kernel_size=7,
+                                            mask=context_mask,
+                                            num_filters=self.lstm_hidden_size,
+                                            num_heads=1,
+                                            seq_len=max_context_length,
+                                            scope="Encoder_Residual_Block",
+                                            bias=False,
+                                            dropout=1.0 - self.keep_prob)
+            print('context_output',
+                  context_output.get_shape().as_list())
+            question_output = residual_block(question_embeddings,
+                                             num_blocks=1,
+                                             num_conv_layers=4,
+                                             kernel_size=7,
+                                             mask=question_mask,
+                                             num_filters=self.lstm_hidden_size,
+                                             num_heads=1,
+                                             seq_len=max_question_length,
+                                             scope="Encoder_Residual_Block",
+                                             reuse=True,  # Share the weights between passage and question
+                                             bias=False,
+                                             dropout=1.0 - self.keep_prob)
 
-        with tf.variable_scope("context_embedding_layer"):
-            context_output, _ = self.encoder(
-                context_embeddings, context_lengths, self.lstm_hidden_size, self.keep_prob)
-
-            d = context_output.get_shape().as_list()[-1]
-
+            print('question_output',
+                  question_output.get_shape().as_list())
             # context_output dimension is BS * max_context_length * d
             # where d = 2*lstm_hidden_size
 
@@ -264,12 +343,12 @@ class Baseline(object):
                 question_output, [0, 2, 1]))
             print('similarity_matrix', similarity_matrix.get_shape().as_list())
 
-            mask_aug = tf.expand_dims(context_mask, 2) & tf.expand_dims(
-                question_mask, 1)
+            mask_aug = tf.expand_dims(
+                context_mask, 2) & tf.expand_dims(question_mask, 1)
 
-            # similarity_matrix = preprocess_softmax(
-            #    similarity_matrix, mask_aug)
-            #print('similarity_matrix', similarity_matrix.get_shape().as_list())
+            similarity_matrix = preprocess_softmax(
+                similarity_matrix, mask_aug)
+            print('similarity_matrix', similarity_matrix.get_shape().as_list())
 
             context_to_query_attention_weights = tf.nn.softmax(
                 similarity_matrix, axis=2)
@@ -280,13 +359,36 @@ class Baseline(object):
                 context_to_query_attention_weights, question_output)
             print('context_to_query', context_to_query.get_shape().as_list())
 
-            attention = tf.concat([context_output, context_to_query], axis=2)
+            max_col_similarity = tf.reduce_max(similarity_matrix, axis=2)
+            print('max_col_similarity', max_col_similarity.get_shape().as_list())
+
+            b = tf.nn.softmax(max_col_similarity, axis=1)
+            print('b', b.get_shape().as_list())
+
+            b = tf.expand_dims(b, 1)
+            print('b', b.get_shape().as_list())
+
+            query_to_context = tf.matmul(b, context_output)
+            print('query_to_context',
+                  query_to_context.get_shape().as_list())
+
+            context_output_with_context_to_query = context_output * context_to_query
+            print('context_output_with_context_to_query',
+                  context_output_with_context_to_query.get_shape().as_list())
+
+            context_output_with_query_to_context = context_output * query_to_context
+            print('context_output_with_query_to_context',
+                  context_output_with_query_to_context.get_shape().as_list())
+
+            attention = tf.concat([context_output, context_to_query,
+                                   context_output_with_context_to_query, context_output_with_query_to_context], axis=2)
             print('attention', attention.get_shape().as_list())
 
         with tf.variable_scope("modeling_layer"):
             m1, _ = self.encoder(attention, context_lengths,
                                  self.lstm_hidden_size, self.keep_prob)
             print('m1', m1.get_shape().as_list())
+            d = m1.get_shape().as_list()[-1]
 
         with tf.variable_scope("output_layer_start"):
             W1 = tf.get_variable("W1", initializer=tf.contrib.layers.xavier_initializer(
@@ -338,9 +440,9 @@ class Baseline(object):
         self.optimize()
 
     def get_data(self):
-        padded_shapes = ((tf.TensorShape([None]),  # question of unknown size
+        padded_shapes = ((tf.TensorShape([self.train_max_question_length]),  # question of unknown size
                           tf.TensorShape([])),  # size(question)
-                         (tf.TensorShape([None]),  # context of unknown size
+                         (tf.TensorShape([self.train_max_context_length]),  # context of unknown size
                           tf.TensorShape([])),  # size(context)
                          tf.TensorShape([2]))
 
@@ -378,7 +480,7 @@ class Baseline(object):
                 self.train_eval_iterator.string_handle())
 
             sess.run(tf.global_variables_initializer())
-            #writer = tf.summary.FileWriter(
+            # writer = tf.summary.FileWriter(
             #    'graphs/attention1', sess.graph)
             initial_step = self.gstep.eval()
             sess.run(self.val_iterator.initializer)
@@ -402,7 +504,6 @@ class Baseline(object):
                     try:
                         total_loss, opt = sess.run(
                             [self.total_loss, self.opt], feed_dict={self.handle: self.train_iterator_handle, self.keep_prob: 0.75})  # , options=options, run_metadata=run_metadata)
-
                         progress.update(index, [("training loss", total_loss)])
 
                     except tf.errors.OutOfRangeError:
@@ -471,4 +572,4 @@ if __name__ == '__main__':
     machine = Baseline(train_dataset, val_dataset,
                        embedding, vocabulary, batch_size=128)
     machine.build()
-    machine.train(10)
+    # machine.train(10)

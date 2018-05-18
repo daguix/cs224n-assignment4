@@ -461,8 +461,8 @@ class Baseline(object):
                 self.train_eval_iterator.string_handle())
 
             sess.run(tf.global_variables_initializer())
-            writer = tf.summary.FileWriter(
-                'graphs/attention1', sess.graph)
+            #writer = tf.summary.FileWriter(
+            #    'graphs/attention1', sess.graph)
             initial_step = self.gstep.eval()
             sess.run(self.val_iterator.initializer)
             sess.run(self.train_eval_iterator.initializer)

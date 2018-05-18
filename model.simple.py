@@ -309,11 +309,11 @@ class Baseline(object):
 
         # train_evaluation = self.train_dataset.
 
-        train_eval_batch = self.train_dataset.shuffle(10000).padded_batch(
-            self.batch_size, padded_shapes=padded_shapes, padding_values=padding_values)
+        train_eval_batch = self.train_dataset.shuffle(1000000).padded_batch(
+            5000, padded_shapes=padded_shapes, padding_values=padding_values)
 
-        val_batch = self.val_dataset.shuffle(10000).padded_batch(
-            500, padded_shapes=padded_shapes, padding_values=padding_values).prefetch(1)
+        val_batch = self.val_dataset.shuffle(1000000).padded_batch(
+            5000, padded_shapes=padded_shapes, padding_values=padding_values).prefetch(1)
 
         # Create a one shot iterator over the zipped dataset
         self.train_iterator = train_batch.make_initializable_iterator()
@@ -337,8 +337,8 @@ class Baseline(object):
                 self.train_eval_iterator.string_handle())
 
             sess.run(tf.global_variables_initializer())
-            writer = tf.summary.FileWriter(
-                'graphs/attention1', sess.graph)
+            # writer = tf.summary.FileWriter(
+            #    'graphs/attention1', sess.graph)
             initial_step = self.gstep.eval()
             sess.run(self.val_iterator.initializer)
             sess.run(self.train_eval_iterator.initializer)
