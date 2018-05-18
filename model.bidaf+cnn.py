@@ -572,4 +572,4 @@ if __name__ == '__main__':
     machine = Baseline(train_dataset, val_dataset,
                        embedding, vocabulary, batch_size=128)
     machine.build()
-    # machine.train(10)
+    machine.train(10)
